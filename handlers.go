@@ -1,15 +1,15 @@
 package main
 
 import (
-    "encoding/json"
-    "errors"
-    "net/http"
-    "strconv"
-    "time"
-    "io"
-    "strings"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
-    "github.com/gorilla/mux"
+	"github.com/gorilla/mux"
 )
 
 // Auth handlers
@@ -278,34 +278,34 @@ func handleGetTeams(w http.ResponseWriter, r *http.Request) {
 
 // handleGetOnlineCounts returns the number of online users per team for the current user
 func handleGetOnlineCounts(w http.ResponseWriter, r *http.Request) {
-    userID, _ := getUserFromContext(r)
+	userID, _ := getUserFromContext(r)
 
-    teams, err := getUserTeams(userID)
-    if err != nil {
-        writeErrorResponse(w, http.StatusInternalServerError, "Failed to get teams")
-        return
-    }
+	teams, err := getUserTeams(userID)
+	if err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Failed to get teams")
+		return
+	}
 
-    counts := make(map[string]int)
+	counts := make(map[string]int)
 
-    // Read hub rooms safely and count unique users per team
-    hub.Mutex.RLock()
-    for _, team := range teams {
-        if room, exists := hub.Rooms[team.ID]; exists {
-            room.Mutex.RLock()
-            users := make(map[string]struct{})
-            for client := range room.Clients {
-                users[client.UserID] = struct{}{}
-            }
-            room.Mutex.RUnlock()
-            counts[team.ID] = len(users)
-        } else {
-            counts[team.ID] = 0
-        }
-    }
-    hub.Mutex.RUnlock()
+	// Read hub rooms safely and count unique users per team
+	hub.Mutex.RLock()
+	for _, team := range teams {
+		if room, exists := hub.Rooms[team.ID]; exists {
+			room.Mutex.RLock()
+			users := make(map[string]struct{})
+			for client := range room.Clients {
+				users[client.UserID] = struct{}{}
+			}
+			room.Mutex.RUnlock()
+			counts[team.ID] = len(users)
+		} else {
+			counts[team.ID] = 0
+		}
+	}
+	hub.Mutex.RUnlock()
 
-    writeSuccessResponse(w, counts, "Online counts retrieved successfully")
+	writeSuccessResponse(w, counts, "Online counts retrieved successfully")
 }
 
 func handleGetTeam(w http.ResponseWriter, r *http.Request) {
@@ -330,125 +330,130 @@ func handleGetTeam(w http.ResponseWriter, r *http.Request) {
 
 // List all users (id, username) - for owner to pick members
 func handleListUsers(w http.ResponseWriter, r *http.Request) {
-    users, err := getAllUsers()
-    if err != nil {
-        writeErrorResponse(w, http.StatusInternalServerError, "Failed to get users")
-        return
-    }
-    // Strip password
-    for _, u := range users {
-        u.Password = ""
-    }
-    writeSuccessResponse(w, users, "Users retrieved successfully")
+	users, err := getAllUsers()
+	if err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Failed to get users")
+		return
+	}
+	// Strip password
+	for _, u := range users {
+		u.Password = ""
+	}
+	writeSuccessResponse(w, users, "Users retrieved successfully")
 }
 
 // Get team members (with roles)
 func handleGetTeamMembers(w http.ResponseWriter, r *http.Request) {
-    vars := mux.Vars(r)
-    teamID := vars["id"]
-    userID, _ := getUserFromContext(r)
+	vars := mux.Vars(r)
+	teamID := vars["id"]
+	userID, _ := getUserFromContext(r)
 
-    if !isTeamMember(teamID, userID) {
-        writeErrorResponse(w, http.StatusForbidden, "Access denied")
-        return
-    }
+	if !isTeamMember(teamID, userID) {
+		writeErrorResponse(w, http.StatusForbidden, "Access denied")
+		return
+	}
 
-    members, err := getTeamMembers(teamID)
-    if err != nil {
-        writeErrorResponse(w, http.StatusInternalServerError, "Failed to get team members")
-        return
-    }
+	members, err := getTeamMembers(teamID)
+	if err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Failed to get team members")
+		return
+	}
 
-    // Enrich with username
-    type MemberDTO struct {
-        ID       string `json:"id"`
-        TeamID   string `json:"team_id"`
-        UserID   string `json:"user_id"`
-        Username string `json:"username"`
-        Role     string `json:"role"`
-        JoinedAt time.Time `json:"joined_at"`
-    }
-    var result []MemberDTO
-    for _, m := range members {
-        u, _ := getUserByID(m.UserID)
-        username := ""
-        if u != nil {
-            username = u.Username
-        }
-        result = append(result, MemberDTO{
-            ID: m.ID, TeamID: m.TeamID, UserID: m.UserID, Username: username, Role: m.Role, JoinedAt: m.JoinedAt,
-        })
-    }
+	// Enrich with username
+	type MemberDTO struct {
+		ID       string    `json:"id"`
+		TeamID   string    `json:"team_id"`
+		UserID   string    `json:"user_id"`
+		Username string    `json:"username"`
+		Role     string    `json:"role"`
+		JoinedAt time.Time `json:"joined_at"`
+	}
+	var result []MemberDTO
+	for _, m := range members {
+		u, _ := getUserByID(m.UserID)
+		username := ""
+		if u != nil {
+			username = u.Username
+		}
+		result = append(result, MemberDTO{
+			ID: m.ID, TeamID: m.TeamID, UserID: m.UserID, Username: username, Role: m.Role, JoinedAt: m.JoinedAt,
+		})
+	}
 
-    writeSuccessResponse(w, result, "Team members retrieved successfully")
+	writeSuccessResponse(w, result, "Team members retrieved successfully")
 }
 
 // Add a member by username (owner only)
 func handleAddTeamMember(w http.ResponseWriter, r *http.Request) {
-    vars := mux.Vars(r)
-    teamID := vars["id"]
-    userID, _ := getUserFromContext(r)
+	vars := mux.Vars(r)
+	teamID := vars["id"]
+	userID, _ := getUserFromContext(r)
 
-    if !isTeamOwner(teamID, userID) {
-        writeErrorResponse(w, http.StatusForbidden, "Only team owner can add members")
-        return
-    }
+	if !isTeamOwner(teamID, userID) {
+		writeErrorResponse(w, http.StatusForbidden, "Only team owner can add members")
+		return
+	}
 
-    var body struct{ Username string `json:"username"` }
-    if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" {
-        writeErrorResponse(w, http.StatusBadRequest, "Username is required")
-        return
-    }
+	var body struct {
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" {
+		writeErrorResponse(w, http.StatusBadRequest, "Username is required")
+		return
+	}
 
-    target, err := getUserByUsername(body.Username)
-    if err != nil {
-        writeErrorResponse(w, http.StatusNotFound, "User not found")
-        return
-    }
+	target, err := getUserByUsername(body.Username)
+	if err != nil {
+		writeErrorResponse(w, http.StatusNotFound, "User not found")
+		return
+	}
 
-    if isTeamMember(teamID, target.ID) {
-        writeErrorResponse(w, http.StatusConflict, "User already a member")
-        return
-    }
+	if isTeamMember(teamID, target.ID) {
+		writeErrorResponse(w, http.StatusConflict, "User already a member")
+		return
+	}
 
-    member := NewTeamMember(teamID, target.ID, "member")
-    if err := addTeamMember(member); err != nil {
-        writeErrorResponse(w, http.StatusInternalServerError, "Failed to add member")
-        return
-    }
+	member := NewTeamMember(teamID, target.ID, "member")
+	if err := addTeamMember(member); err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Failed to add member")
+		return
+	}
 
-    writeSuccessResponse(w, map[string]string{"user_id": target.ID}, "Member added successfully")
+	writeSuccessResponse(w, map[string]string{"user_id": target.ID}, "Member added successfully")
 }
 
 // Remove a member by user ID (owner only, cannot remove owner)
 func handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) {
-    vars := mux.Vars(r)
-    teamID := vars["id"]
-    targetUserID := vars["userId"]
-    userID, _ := getUserFromContext(r)
+	vars := mux.Vars(r)
+	teamID := vars["id"]
+	targetUserID := vars["userId"]
+	userID, _ := getUserFromContext(r)
 
-    if !isTeamOwner(teamID, userID) {
-        writeErrorResponse(w, http.StatusForbidden, "Only team owner can remove members")
-        return
-    }
+	if !isTeamOwner(teamID, userID) {
+		writeErrorResponse(w, http.StatusForbidden, "Only team owner can remove members")
+		return
+	}
 
-    // Prevent removing owner
-    if isTeamOwner(teamID, targetUserID) {
-        writeErrorResponse(w, http.StatusBadRequest, "Cannot remove team owner")
-        return
-    }
+	// Prevent removing owner
+	if isTeamOwner(teamID, targetUserID) {
+		writeErrorResponse(w, http.StatusBadRequest, "Cannot remove team owner")
+		return
+	}
 
-    if !isTeamMember(teamID, targetUserID) {
-        writeErrorResponse(w, http.StatusNotFound, "User is not a member")
-        return
-    }
+	if !isTeamMember(teamID, targetUserID) {
+		writeErrorResponse(w, http.StatusNotFound, "User is not a member")
+		return
+	}
 
-    if err := removeTeamMember(teamID, targetUserID); err != nil {
-        writeErrorResponse(w, http.StatusInternalServerError, "Failed to remove member")
-        return
-    }
+	if err := removeTeamMember(teamID, targetUserID); err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Failed to remove member")
+		return
+	}
 
-    writeSuccessResponse(w, nil, "Member removed successfully")
+	// Kick active WS connections for removed user with notification
+	kickUserFromTeam(teamID, targetUserID, "You were removed from the team by an admin.")
+
+	writeSuccessResponse(w, nil, "Member removed successfully")
 }
 
 func handleJoinTeam(w http.ResponseWriter, r *http.Request) {
@@ -619,8 +624,8 @@ func handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 		room.broadcast(WebSocketMessage{
 			Type: "message_deleted",
 			Payload: map[string]interface{}{
-				"id":             messageID,
-				"deleted_by":     userID,
+				"id":              messageID,
+				"deleted_by":      userID,
 				"deleted_by_name": deleterName,
 			},
 		}, nil)
@@ -631,98 +636,98 @@ func handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 
 // handleUpload handles image uploads and returns a public URL
 func handleUpload(w http.ResponseWriter, r *http.Request) {
-    userID, _ := getUserFromContext(r)
+	userID, _ := getUserFromContext(r)
 
-    // Limit upload size to 8MB
-    r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
-    if err := r.ParseMultipartForm(8 << 20); err != nil {
-        writeErrorResponse(w, http.StatusBadRequest, "File too large or invalid form")
-        return
-    }
+	// Limit upload size to 8MB
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
+	if err := r.ParseMultipartForm(8 << 20); err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "File too large or invalid form")
+		return
+	}
 
-    file, header, err := r.FormFile("file")
-    if err != nil {
-        writeErrorResponse(w, http.StatusBadRequest, "Missing file")
-        return
-    }
-    defer file.Close()
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "Missing file")
+		return
+	}
+	defer file.Close()
 
-    // Sniff content type
-    buf := make([]byte, 512)
-    n, _ := file.Read(buf)
-    contentType := http.DetectContentType(buf[:n])
-    // Reset reader to start
-    if _, err := file.Seek(0, io.SeekStart); err != nil {
-        writeErrorResponse(w, http.StatusInternalServerError, "Failed to read file")
-        return
-    }
+	// Sniff content type
+	buf := make([]byte, 512)
+	n, _ := file.Read(buf)
+	contentType := http.DetectContentType(buf[:n])
+	// Reset reader to start
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Failed to read file")
+		return
+	}
 
-    // Allow only images
-    switch contentType {
-    case "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif":
-    default:
-        writeErrorResponse(w, http.StatusBadRequest, "Unsupported file type")
-        return
-    }
+	// Allow only images
+	switch contentType {
+	case "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif":
+	default:
+		writeErrorResponse(w, http.StatusBadRequest, "Unsupported file type")
+		return
+	}
 
-    // Read entire file (guarded by MaxBytesReader and ParseMultipartForm size)
-    data, err := io.ReadAll(file)
-    if err != nil {
-        writeErrorResponse(w, http.StatusInternalServerError, "Failed to read file")
-        return
-    }
+	// Read entire file (guarded by MaxBytesReader and ParseMultipartForm size)
+	data, err := io.ReadAll(file)
+	if err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Failed to read file")
+		return
+	}
 
-    // Save to BoltDB uploads bucket (associate owner; team linkage optional)
-    teamID := r.URL.Query().Get("team_id")
-    uploadID, err := saveUpload(header.Filename, contentType, userID, teamID, data)
-    if err != nil {
-        writeErrorResponse(w, http.StatusInternalServerError, "Failed to store file")
-        return
-    }
+	// Save to BoltDB uploads bucket (associate owner; team linkage optional)
+	teamID := r.URL.Query().Get("team_id")
+	uploadID, err := saveUpload(header.Filename, contentType, userID, teamID, data)
+	if err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Failed to store file")
+		return
+	}
 
-    // Public URL (served via API); access requires Authorization header
-    url := "/api/uploads/" + uploadID
-    writeSuccessResponse(w, map[string]string{"url": url}, "Upload successful")
+	// Public URL (served via API); access requires Authorization header
+	url := "/api/uploads/" + uploadID
+	writeSuccessResponse(w, map[string]string{"url": url}, "Upload successful")
 }
 
 // handleGetUpload streams an uploaded image by ID
 func handleGetUpload(w http.ResponseWriter, r *http.Request) {
-    vars := mux.Vars(r)
-    id := vars["id"]
-    if id == "" {
-        writeErrorResponse(w, http.StatusBadRequest, "Missing id")
-        return
-    }
+	vars := mux.Vars(r)
+	id := vars["id"]
+	if id == "" {
+		writeErrorResponse(w, http.StatusBadRequest, "Missing id")
+		return
+	}
 
-    // Require Authorization header (no more token query param)
-    authHeader := r.Header.Get("Authorization")
-    if !strings.HasPrefix(authHeader, "Bearer ") {
-        http.Error(w, "Unauthorized", http.StatusUnauthorized)
-        return
-    }
-    token := strings.TrimPrefix(authHeader, "Bearer ")
-    claims, err := validateToken(token)
-    if err != nil {
-        http.Error(w, "Unauthorized", http.StatusUnauthorized)
-        return
-    }
+	// Require Authorization header (no more token query param)
+	authHeader := r.Header.Get("Authorization")
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	claims, err := validateToken(token)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
 
-    meta, data, err := getUpload(id)
-    if err != nil {
-        writeErrorResponse(w, http.StatusNotFound, "Not found")
-        return
-    }
+	meta, data, err := getUpload(id)
+	if err != nil {
+		writeErrorResponse(w, http.StatusNotFound, "Not found")
+		return
+	}
 
-    // Access control: owner or member of the upload team (if set)
-    if meta.OwnerID != "" && meta.OwnerID != claims.UserID {
-        if meta.TeamID == "" || !isTeamMember(meta.TeamID, claims.UserID) {
-            http.Error(w, "Forbidden", http.StatusForbidden)
-            return
-        }
-    }
+	// Access control: owner or member of the upload team (if set)
+	if meta.OwnerID != "" && meta.OwnerID != claims.UserID {
+		if meta.TeamID == "" || !isTeamMember(meta.TeamID, claims.UserID) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+	}
 
-    w.Header().Set("Content-Type", meta.ContentType)
-    w.Header().Set("Cache-Control", "private, max-age=31536000")
-    w.WriteHeader(http.StatusOK)
-    _, _ = w.Write(data)
+	w.Header().Set("Content-Type", meta.ContentType)
+	w.Header().Set("Cache-Control", "private, max-age=31536000")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }

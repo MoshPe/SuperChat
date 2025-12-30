@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo, useRef } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { 
   MessageSquare, 
@@ -20,27 +20,59 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
   const [searchTerm, setSearchTerm] = useState('')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [onlineCounts, setOnlineCounts] = useState({})
+  const firstLoadRef = useRef(true)
+
+  const teamsEqual = (a = [], b = []) => {
+    if (a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) {
+      if (a[i].id !== b[i].id || a[i].name !== b[i].name || a[i].description !== b[i].description) {
+        return false
+      }
+    }
+    return true
+  }
 
   useEffect(() => {
     // Initial fetch
     fetchTeams()
     fetchOnlineCounts()
-    // Poll every 10 seconds
+    // Poll every 2 seconds to reflect membership changes quickly
     const interval = setInterval(() => {
       fetchTeams()
       fetchOnlineCounts()
-    }, 10000)
-    return () => clearInterval(interval)
+    }, 2000)
+
+    // Refresh on tab focus/visibility change
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchTeams()
+        fetchOnlineCounts()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', handleVisibility)
+    }
   }, [])
 
   const fetchTeams = async () => {
     try {
-      setLoading(true)
+      if (firstLoadRef.current) {
+        setLoading(true)
+      }
       const response = await api.get('/teams')
-      setTeams(response.data.data || [])
+      const incoming = (response.data.data || []).slice().sort((a, b) => a.name.localeCompare(b.name))
+      setTeams(prev => {
+        const sortedPrev = (prev || []).slice().sort((a, b) => a.name.localeCompare(b.name))
+        if (teamsEqual(sortedPrev, incoming)) return prev
+        return incoming
+      })
     } catch (error) {
       console.error('Failed to fetch teams:', error)
     } finally {
+      firstLoadRef.current = false
       setLoading(false)
     }
   }
@@ -48,7 +80,12 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
   const fetchOnlineCounts = async () => {
     try {
       const response = await api.get('/teams/online')
-      setOnlineCounts(response.data.data || {})
+      const data = response.data.data || {}
+      setOnlineCounts(prev => {
+        const same = Object.keys(data).length === Object.keys(prev).length &&
+          Object.keys(data).every(k => data[k] === prev[k])
+        return same ? prev : data
+      })
     } catch (error) {
       console.error('Failed to fetch online counts:', error)
     }
@@ -67,10 +104,12 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
     }
   }
 
-  const filteredTeams = teams.filter(team =>
-    team.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    team.description?.toLowerCase().includes(searchTerm.toLowerCase())
-  )
+  const filteredTeams = useMemo(() => {
+    return teams.filter(team =>
+      team.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      team.description?.toLowerCase().includes(searchTerm.toLowerCase())
+    )
+  }, [teams, searchTerm])
 
   const isActive = (path) => {
     return location.pathname === path
@@ -179,33 +218,12 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
               </div>
             ) : (
               filteredTeams.map((team) => (
-                <Link
+                <TeamListItem
                   key={team.id}
-                  to={`/chat/${team.id}`}
-                  className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
-                    isTeamActive(team.id)
-                      ? 'bg-primary-50 text-primary-700 border border-primary-200'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
-                >
-                  <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-500 rounded-lg flex items-center justify-center">
-                    <Users className="w-4 h-4 text-white" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate">{team.name}</p>
-                    {team.description && (
-                      <p className="text-xs text-gray-500 truncate">{team.description}</p>
-                    )}
-                  </div>
-                  <div className="ml-auto flex items-center space-x-1 text-xs text-gray-500">
-                    <span
-                      className={`inline-block w-2 h-2 rounded-full ${
-                        (onlineCounts[team.id] || 0) > 0 ? 'bg-green-500' : 'bg-gray-300'
-                      }`}
-                    />
-                    <span>{onlineCounts[team.id] || 0}</span>
-                  </div>
-                </Link>
+                  team={team}
+                  active={isTeamActive(team.id)}
+                  online={onlineCounts[team.id] || 0}
+                />
               ))
             )}
           </div>
@@ -225,3 +243,34 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
 }
 
 export default Sidebar
+
+const TeamListItem = React.memo(function TeamListItem({ team, active, online }) {
+  return (
+    <Link
+      to={`/chat/${team.id}`}
+      className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
+        active
+          ? 'bg-primary-50 text-primary-700 border border-primary-200'
+          : 'text-gray-700 hover:bg-gray-50'
+      }`}
+    >
+      <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-500 rounded-lg flex items-center justify-center">
+        <Users className="w-4 h-4 text-white" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-sm font-medium truncate">{team.name}</p>
+        {team.description && (
+          <p className="text-xs text-gray-500 truncate">{team.description}</p>
+        )}
+      </div>
+      <div className="ml-auto flex items-center space-x-1 text-xs text-gray-500">
+        <span
+          className={`inline-block w-2 h-2 rounded-full ${
+            online > 0 ? 'bg-green-500' : 'bg-gray-300'
+          }`}
+        />
+        <span>{online}</span>
+      </div>
+    </Link>
+  )
+})

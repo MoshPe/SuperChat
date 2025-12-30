@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import { useStatus } from '../contexts/StatusContext'
 import { 
   Send, 
   Users, 
@@ -35,12 +36,34 @@ const Chat = () => {
   const [showManageMembers, setShowManageMembers] = useState(false)
   const [hoveredMessageId, setHoveredMessageId] = useState(null)
   const [openMenuId, setOpenMenuId] = useState(null)
+  const shouldReconnectRef = useRef(true)
+  const [removalNotice, setRemovalNotice] = useState('')
+  const { setServerDown } = useStatus()
+
+  const checkMembership = async () => {
+    try {
+      await api.get(`/teams/${teamId}`)
+      setServerDown('')
+      return true
+    } catch (err) {
+      if (!err.response) {
+        setServerDown('Not connected to server.')
+      }
+      if (err.response?.status === 403 || err.response?.status === 404) {
+        handleRemoved('You were removed from this team.')
+        return false
+      }
+      return false
+    }
+  }
 
   useEffect(() => {
-    fetchTeamData()
+    shouldReconnectRef.current = true
     if (token) connectWebSocket()
+    fetchTeamData()
     
     return () => {
+      shouldReconnectRef.current = false
       if (wsRef.current) {
         try { wsRef.current.onopen = null; wsRef.current.onmessage = null; wsRef.current.onclose = null; wsRef.current.onerror = null } catch {}
         try { wsRef.current.close() } catch {}
@@ -97,9 +120,18 @@ const Chat = () => {
     }
   }, [])
 
+  const handleRemoved = (reason) => {
+    shouldReconnectRef.current = false
+    if (wsRef.current) {
+      try { wsRef.current.close() } catch {}
+    }
+    setRemovalNotice(reason)
+  }
+
   const fetchTeamData = async () => {
     try {
       setLoading(true)
+      setServerDown('')
       
       // Fetch team info
       const teamResponse = await api.get(`/teams/${teamId}`)
@@ -111,20 +143,34 @@ const Chat = () => {
       
     } catch (error) {
       console.error('Failed to fetch team data:', error)
+      if (!error.response) {
+        setServerDown('Not connected to server.')
+      }
       if (error.response?.status === 403) {
-        navigate('/dashboard')
+        handleRemoved('You were removed from this team.')
       }
     } finally {
       setLoading(false)
     }
   }
 
+  // If disconnected for more than a short window, re-verify membership to avoid lingering
+  useEffect(() => {
+    if (isConnected) return
+    const timer = setTimeout(() => {
+      checkMembership()
+    }, 1500)
+    return () => clearTimeout(timer)
+  }, [isConnected, teamId])
+
   const connectWebSocket = () => {
+    if (!shouldReconnectRef.current) return
     // Close existing connection if any
     if (wsRef.current) {
       try { wsRef.current.close() } catch {}
     }
-    const wsUrl = `ws://${window.location.hostname}:${window.location.port}/api/ws/${teamId}?token=${encodeURIComponent(token)}`
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    const wsUrl = `${protocol}://${window.location.hostname}:${window.location.port}/api/ws/${teamId}?token=${encodeURIComponent(token)}`
     const websocket = new WebSocket(wsUrl)
     
     websocket.onopen = () => {
@@ -148,17 +194,31 @@ const Chat = () => {
         wsRef.current = null
       }
       
-      // Try to reconnect after 3 seconds
-      setTimeout(() => {
-        if (wsRef.current === websocket || wsRef.current === null) {
-          // only reconnect if not replaced by a newer socket
-          connectWebSocket()
-        }
-      }, 1200)
+      // Check membership; if removed, stop reconnects and redirect
+      checkMembership().then((stillMember) => {
+        if (!stillMember) return
+        // Try to reconnect after 3 seconds (if allowed)
+        setTimeout(() => {
+          if (!shouldReconnectRef.current) return
+          if (wsRef.current === websocket || wsRef.current === null) {
+            // only reconnect if not replaced by a newer socket
+            connectWebSocket()
+          }
+        }, 300)
+      })
     }
     
     websocket.onerror = (error) => {
       console.error('WebSocket error:', error)
+      setServerDown('Not connected to server.')
+      checkMembership()
+      // Try a quick reconnect if still allowed
+      setTimeout(() => {
+        if (!shouldReconnectRef.current) return
+        if (!wsRef.current) {
+          connectWebSocket()
+        }
+      }, 300)
     }
     
     wsRef.current = websocket
@@ -186,6 +246,11 @@ const Chat = () => {
             type: 'system',
           }
         }))
+        break
+      }
+      case 'removed_from_team': {
+        const reason = data.payload?.reason || 'You were removed from the team.'
+        handleRemoved(reason)
         break
       }
       case 'user_joined':
@@ -381,6 +446,23 @@ const Chat = () => {
 
   return (
     <div className="h-[calc(100vh-8rem)] flex flex-col">
+      {removalNotice && (
+        <div className="fixed inset-0 bg-gray-900 bg-opacity-60 z-50 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-sm w-full mx-4 p-6 text-center">
+            <div className="mx-auto mb-4 w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center text-xl font-bold">
+              !
+            </div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Removed from team</h3>
+            <p className="text-sm text-gray-600 mb-4">{removalNotice}</p>
+            <button
+              onClick={() => navigate('/dashboard')}
+              className="w-full btn-primary py-2"
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
       {/* Team header */}
       <div className="bg-white border-b border-gray-200 p-4">
         <div className="flex items-center justify-between">
@@ -469,7 +551,7 @@ const Chat = () => {
                 message.user_id === user.id ? 'flex-row-reverse space-x-reverse' : ''
               }`}
             >
-              <div className={`relative max-w-xs lg:max-w-md ${message.user_id === user.id ? 'text-right' : ''} ${message.user_id === user.id ? 'pl-6' : ''}`}>
+              <div className={`relative max-w-xs lg:max-w-md ${message.user_id === user.id ? 'text-right' : ''}`}>
                 {(() => {
                   const isImage = message.type === 'image' || (typeof message.content === 'string' && message.content.startsWith('/api/uploads/'))
                   const key = message.id || message.content
@@ -495,46 +577,22 @@ const Chat = () => {
                   </div>
                   )
                 })()}
-                <div className={`mt-1 text-xs text-gray-500 ${
-                  message.user_id === user.id ? 'text-right' : ''
-                }`}>
+                <div className={`mt-1 text-xs text-gray-500 ${message.user_id === user.id ? 'text-right' : ''}`}>
                   <span>{message.name || message.username}</span>
-                  <span className="mx-2">•</span>
+                  <span className="mx-2">&middot;</span>
                   <span>{formatTime(message.created_at || message.timestamp)}</span>
+                  {message.user_id === user.id && (
+                    <>
+                      <span className="mx-2">&middot;</span>
+                      <button
+                        onClick={() => deleteMessage(message.id)}
+                        className="text-red-500 hover:text-red-700"
+                      >
+                        Delete
+                      </button>
+                    </>
+                  )}
                 </div>
-                {message.user_id === user.id && hoveredMessageId === message.id && (
-                  <div
-                    className="absolute"
-                    style={{ left: '-16px', top: '8px' }}
-                  >
-                    <button
-                      onClick={() => setOpenMenuId(openMenuId === message.id ? null : message.id)}
-                      className="p-1 text-gray-400 hover:text-gray-600"
-                    >
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 12.75a.75.75 0 110-1.5.75.75 0 010 1.5zM12 18.75a.75.75 0 110-1.5.75.75 0 010 1.5z" />
-                      </svg>
-                    </button>
-                    {openMenuId === message.id && (
-                      <div className="absolute left-0 mt-1 w-28 bg-white border border-gray-200 rounded shadow-md text-left text-sm z-10">
-                        {message.type !== 'image' && (
-                          <button className="w-full text-left px-3 py-2 text-gray-700 hover:bg-gray-100" disabled>
-                            Edit (coming soon)
-                          </button>
-                        )}
-                        <button
-                          onClick={() => {
-                            deleteMessage(message.id)
-                            setOpenMenuId(null)
-                          }}
-                          className="w-full text-left px-3 py-2 text-red-600 hover:bg-red-50"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             </div>
           ))
@@ -631,3 +689,7 @@ const Chat = () => {
 }
 
 export default Chat
+
+
+
+

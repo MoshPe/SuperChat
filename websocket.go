@@ -14,13 +14,13 @@ import (
 
 // Client represents a WebSocket client
 type Client struct {
-    ID       string
-    UserID   string
-    Username string
-    TeamID   string
-    Conn     *websocket.Conn
-    Send     chan []byte
-    once     sync.Once
+	ID       string
+	UserID   string
+	Username string
+	TeamID   string
+	Conn     *websocket.Conn
+	Send     chan []byte
+	once     sync.Once
 }
 
 // TeamRoom represents a chat room for a team
@@ -204,28 +204,43 @@ func (c *Client) writePump(room *TeamRoom) {
 
 // handleChatMessage processes chat messages
 func (c *Client) handleChatMessage(room *TeamRoom, wsMessage WebSocketMessage) {
-    payload, ok := wsMessage.Payload.(map[string]interface{})
-    if !ok {
-        return
-    }
+	payload, ok := wsMessage.Payload.(map[string]interface{})
+	if !ok {
+		return
+	}
 
-    content, ok := payload["content"].(string)
-    if !ok || content == "" {
-        return
-    }
+	content, ok := payload["content"].(string)
+	if !ok || content == "" {
+		return
+	}
 
-    // Determine message type (default to text)
-    msgType := "text"
-    if t, ok := payload["type"].(string); ok && t != "" {
-        msgType = t
-    }
+	// Re-check membership; if removed, notify and disconnect
+	if !isTeamMember(c.TeamID, c.UserID) {
+		removalNotice := WebSocketMessage{
+			Type: "removed_from_team",
+			Payload: map[string]interface{}{
+				"reason": "You were removed from the team.",
+			},
+		}
+		if data, err := json.Marshal(removalNotice); err == nil {
+			c.Send <- data
+		}
+		c.disconnect(room)
+		return
+	}
 
-    // Create and save message to database
-    message := NewMessage(c.TeamID, c.UserID, c.Username, content, msgType)
-    if err := saveMessage(message); err != nil {
-        log.Printf("Failed to save message: %v", err)
-        return
-    }
+	// Determine message type (default to text)
+	msgType := "text"
+	if t, ok := payload["type"].(string); ok && t != "" {
+		msgType = t
+	}
+
+	// Create and save message to database
+	message := NewMessage(c.TeamID, c.UserID, c.Username, content, msgType)
+	if err := saveMessage(message); err != nil {
+		log.Printf("Failed to save message: %v", err)
+		return
+	}
 
 	// Broadcast message to all clients in the room
 	chatMessage := WebSocketMessage{
@@ -270,67 +285,98 @@ func (c *Client) handlePing() {
 
 // disconnect removes the client from the room
 func (c *Client) disconnect(room *TeamRoom) {
-    // Ensure disconnect logic runs only once per client
-    c.once.Do(func() {
-        room.Mutex.Lock()
-        delete(room.Clients, c)
-        room.Mutex.Unlock()
+	// Ensure disconnect logic runs only once per client
+	c.once.Do(func() {
+		room.Mutex.Lock()
+		delete(room.Clients, c)
+		room.Mutex.Unlock()
 
-        // Safe close of send channel
-        close(c.Send)
-        // Close websocket connection
-        _ = c.Conn.Close()
+		// Safe close of send channel
+		close(c.Send)
+		// Close websocket connection
+		_ = c.Conn.Close()
 
-        // Send leave notification
-        leaveMessage := WebSocketMessage{
-            Type: "user_left",
-            Payload: map[string]interface{}{
-                "user_id":   c.UserID,
-                "username":  c.Username,
-                "timestamp": time.Now(),
-            },
-        }
-        room.broadcast(leaveMessage, nil)
+		// Send leave notification
+		leaveMessage := WebSocketMessage{
+			Type: "user_left",
+			Payload: map[string]interface{}{
+				"user_id":   c.UserID,
+				"username":  c.Username,
+				"timestamp": time.Now(),
+			},
+		}
+		room.broadcast(leaveMessage, nil)
 
-        // Clean up empty rooms
-        room.Mutex.RLock()
-        if len(room.Clients) == 0 {
-            room.Mutex.RUnlock()
-            hub.Mutex.Lock()
-            delete(hub.Rooms, room.ID)
-            hub.Mutex.Unlock()
-        } else {
-            room.Mutex.RUnlock()
-        }
-    })
+		// Clean up empty rooms
+		room.Mutex.RLock()
+		if len(room.Clients) == 0 {
+			room.Mutex.RUnlock()
+			hub.Mutex.Lock()
+			delete(hub.Rooms, room.ID)
+			hub.Mutex.Unlock()
+		} else {
+			room.Mutex.RUnlock()
+		}
+	})
+}
+
+// kickUserFromTeam notifies and disconnects a user from a team room if connected.
+func kickUserFromTeam(teamID, userID, reason string) {
+	hub.Mutex.RLock()
+	room, ok := hub.Rooms[teamID]
+	hub.Mutex.RUnlock()
+	if !ok {
+		return
+	}
+	room.Mutex.RLock()
+	var targets []*Client
+	for client := range room.Clients {
+		if client.UserID == userID {
+			targets = append(targets, client)
+		}
+	}
+	room.Mutex.RUnlock()
+
+	for _, client := range targets {
+		notice := WebSocketMessage{
+			Type: "removed_from_team",
+			Payload: map[string]interface{}{
+				"reason": reason,
+			},
+		}
+		if data, err := json.Marshal(notice); err == nil {
+			client.Send <- data
+		}
+		client.disconnect(room)
+	}
 }
 
 // broadcast sends a message to all clients in the room
 func (r *TeamRoom) broadcast(message WebSocketMessage, exclude *Client) {
-    data, err := json.Marshal(message)
-    if err != nil {
-        log.Printf("Failed to marshal message: %v", err)
-        return
-    }
+	data, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("Failed to marshal message: %v", err)
+		return
+	}
 
-    // Collect clients that are blocked so we can disconnect after releasing lock
-    var toRemove []*Client
+	// Collect clients that are blocked so we can disconnect after releasing lock
+	var toRemove []*Client
 
-    r.Mutex.RLock()
-    for client := range r.Clients {
-        if client != exclude {
-            select {
-            case client.Send <- data:
-            default:
-                // Mark for removal; don't close here to avoid double-close race
-                toRemove = append(toRemove, client)
-            }
-        }
-    }
-    r.Mutex.RUnlock()
+	r.Mutex.RLock()
+	for client := range r.Clients {
+		if client != exclude {
+			select {
+			case client.Send <- data:
+			default:
+				// Mark for removal; don't close here to avoid double-close race
+				toRemove = append(toRemove, client)
+			}
+		}
+	}
+	r.Mutex.RUnlock()
 
-    // Disconnect blocked clients outside of lock
-    for _, client := range toRemove {
-        client.disconnect(r)
-    }
+	// Disconnect blocked clients outside of lock
+	for _, client := range toRemove {
+		client.disconnect(r)
+	}
 }
