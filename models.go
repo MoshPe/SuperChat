@@ -23,6 +23,7 @@ type Team struct {
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
 	OwnerID     string    `json:"owner_id"`
+	Avatar      string    `json:"avatar"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -82,18 +83,18 @@ type APIResponse struct {
 
 // WebSocketMessage represents a WebSocket message
 type WebSocketMessage struct {
-    Type    string      `json:"type"`
-    Payload interface{} `json:"payload"`
+	Type    string      `json:"type"`
+	Payload interface{} `json:"payload"`
 }
 
 // Upload metadata stored in BoltDB
 type UploadMeta struct {
-    ID          string    `json:"id"`
-    Filename    string    `json:"filename"`
-    ContentType string    `json:"content_type"`
-    OwnerID     string    `json:"owner_id"`
-    TeamID      string    `json:"team_id,omitempty"`
-    CreatedAt   time.Time `json:"created_at"`
+	ID          string    `json:"id"`
+	Filename    string    `json:"filename"`
+	ContentType string    `json:"content_type"`
+	OwnerID     string    `json:"owner_id"`
+	TeamID      string    `json:"team_id,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Helper functions
@@ -116,6 +117,7 @@ func NewTeam(name, description, ownerID string) *Team {
 		Name:        name,
 		Description: description,
 		OwnerID:     ownerID,
+		Avatar:      "",
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}

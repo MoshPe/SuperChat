@@ -8,7 +8,7 @@
   }
   
   body {
-    @apply bg-gray-50 text-gray-900;
+    @apply bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100;
   }
 }
 
@@ -18,23 +18,23 @@
   }
   
   .btn-primary {
-    @apply btn bg-primary-600 text-white hover:bg-primary-700 focus:ring-primary-500;
+    @apply btn bg-primary-600 text-white hover:bg-primary-700 focus:ring-primary-500 dark:focus:ring-offset-gray-900;
   }
   
   .btn-secondary {
-    @apply btn bg-gray-200 text-gray-700 hover:bg-gray-300 focus:ring-gray-500;
+    @apply btn bg-gray-200 text-gray-700 hover:bg-gray-300 focus:ring-gray-500 dark:bg-gray-700 dark:text-gray-100 dark:hover:bg-gray-600 dark:focus:ring-offset-gray-900;
   }
   
   .btn-outline {
-    @apply btn border border-gray-300 text-gray-700 hover:bg-gray-50 focus:ring-gray-500;
+    @apply btn border border-gray-300 text-gray-700 hover:bg-gray-50 focus:ring-gray-500 dark:border-gray-600 dark:text-gray-100 dark:hover:bg-gray-800 dark:focus:ring-offset-gray-900;
   }
   
   .input {
-    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent;
+    @apply w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100 dark:placeholder-gray-400;
   }
   
   .card {
-    @apply bg-white rounded-xl shadow-sm border border-gray-200;
+    @apply bg-white rounded-xl shadow-sm border border-gray-200 dark:bg-gray-800 dark:border-gray-700;
   }
   
   .message-bubble {
@@ -46,7 +46,7 @@
   }
   
   .message-bubble.other {
-    @apply bg-gray-200 text-gray-900;
+    @apply bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-gray-100;
   }
 }
 
@@ -59,6 +59,37 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+
+  .custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: #9ca3af #f3f4f6;
+  }
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 8px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: #f3f4f6;
+    border-radius: 9999px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #9ca3af;
+    border-radius: 9999px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+  }
+  .dark .custom-scrollbar {
+    scrollbar-color: #4b5563 #1f2937;
+  }
+  .dark .custom-scrollbar::-webkit-scrollbar-track {
+    background: #1f2937;
+  }
+  .dark .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #4b5563;
+  }
+  .dark .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #6b7280;
+  }
   
   .text-gradient {
     @apply bg-gradient-to-r from-primary-600 to-primary-800 bg-clip-text text-transparent;
@@ -69,8 +100,29 @@
   display: flex;
   flex-direction: row;
   flex-wrap: nowrap;
+  background-color: inherit;
+  min-height: 100vh;
+  height: 100vh;
 }
 
 .right-container {
   width: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
+.dark .right-container {
+  background-color: #111827;
+}
+
+/* Global dark overrides to keep legacy text/background classes readable */
+.dark .text-gray-900 { color: #f3f4f6 !important; }
+.dark .text-gray-800 { color: #e5e7eb !important; }
+.dark .text-gray-700 { color: #e5e7eb !important; }
+.dark .text-gray-600 { color: #d1d5db !important; }
+.dark .text-gray-500 { color: #9ca3af !important; }
+.dark .text-gray-400 { color: #9ca3af !important; }
+.dark .bg-white { background-color: #1f2937 !important; }
+.dark .border-gray-200 { border-color: #374151 !important; }
+.dark .hover\\:bg-gray-50:hover { background-color: #1f2937 !important; }

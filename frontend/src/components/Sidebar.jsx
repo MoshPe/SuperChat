@@ -21,11 +21,17 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [onlineCounts, setOnlineCounts] = useState({})
   const firstLoadRef = useRef(true)
+  const [avatarUrls, setAvatarUrls] = useState({})
 
   const teamsEqual = (a = [], b = []) => {
     if (a.length !== b.length) return false
     for (let i = 0; i < a.length; i++) {
-      if (a[i].id !== b[i].id || a[i].name !== b[i].name || a[i].description !== b[i].description) {
+      if (
+        a[i].id !== b[i].id ||
+        a[i].name !== b[i].name ||
+        a[i].description !== b[i].description ||
+        a[i].avatar !== b[i].avatar
+      ) {
         return false
       }
     }
@@ -56,6 +62,46 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
       document.removeEventListener('visibilitychange', handleVisibility)
     }
   }, [])
+
+  // Fetch and cache avatar blobs for teams (protected endpoints)
+  useEffect(() => {
+    const loadAvatars = async () => {
+      for (const t of teams) {
+        if (!t.avatar) continue
+        if (avatarUrls[t.avatar]) continue
+        let path = t.avatar
+        if (path.startsWith('/api/')) {
+          path = path.replace(/^\/api/, '')
+        }
+        try {
+          const res = await api.get(path, { responseType: 'blob' })
+          const url = URL.createObjectURL(res.data)
+          setAvatarUrls(prev => ({ ...prev, [t.avatar]: url }))
+        } catch (e) {
+          console.error('Failed to load avatar', e)
+        }
+      }
+    }
+    loadAvatars()
+    return () => {
+      Object.values(avatarUrls).forEach(url => URL.revokeObjectURL(url))
+    }
+  }, [teams, avatarUrls])
+
+  // Cleanup cached avatars that are no longer referenced
+  useEffect(() => {
+    setAvatarUrls(prev => {
+      const used = new Set(teams.filter(t => t.avatar).map(t => t.avatar))
+      const next = { ...prev }
+      Object.keys(next).forEach(k => {
+        if (!used.has(k)) {
+          URL.revokeObjectURL(next[k])
+          delete next[k]
+        }
+      })
+      return next
+    })
+  }, [teams])
 
   const fetchTeams = async () => {
     try {
@@ -123,11 +169,11 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
     <>
       {/* Sidebar */}
       <div className={`
-        fixed inset-y-0 left-0 z-50 min-w-[16rem] w-80 bg-white border-r border-gray-200 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0
+        fixed inset-y-0 left-0 z-50 min-w-[16rem] w-80 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 transform transition-transform duration-300 ease-in-out lg:translate-x-0 lg:static lg:inset-0
         ${isOpen ? 'translate-x-0' : '-translate-x-full'}
       `}>
         {/* Sidebar header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-200">
+        <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center space-x-2">
             <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-primary-600 rounded-lg flex items-center justify-center">
               <MessageSquare className="w-5 h-5 text-white" />
@@ -136,18 +182,18 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
           </div>
           <button
             onClick={onClose}
-            className="lg:hidden p-1 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100"
+            className="lg:hidden p-1 rounded-md text-gray-400 hover:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
         {/* User quick actions at top */}
-        <div className="px-4 py-3 border-b border-gray-200">
+        <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700">
           <div className="flex items-center justify-between">
             <button
               onClick={() => navigate('/profile')}
-              className="text-sm font-medium text-gray-900 hover:text-primary-600 truncate"
+              className="text-sm font-medium text-gray-900 dark:text-gray-100 hover:text-primary-600 truncate"
               title="View profile"
             >
               {user?.name || user?.username}
@@ -168,8 +214,8 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
             to="/dashboard"
             className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
               isActive('/dashboard')
-                ? 'bg-primary-50 text-primary-700 border border-primary-200'
-                : 'text-gray-700 hover:bg-gray-50'
+                ? 'bg-primary-50 text-primary-700 border border-primary-200 dark:bg-gray-700 dark:text-primary-100 dark:border-gray-600'
+                : 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-700'
             }`}
           >
             <Users className="w-5 h-5" />
@@ -180,9 +226,9 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
         </nav>
 
         {/* Teams section */}
-        <div className="p-4 border-t border-gray-200">
+        <div className="p-4 border-t border-gray-200 dark:border-gray-700">
           <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-gray-900 uppercase tracking-wider">
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-gray-100 uppercase tracking-wider">
               Teams
             </h2>
             <button
@@ -202,7 +248,7 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
               placeholder="Search teams..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+              className="w-full pl-10 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent dark:bg-gray-900 dark:border-gray-700 dark:text-gray-100"
             />
           </div>
 
@@ -223,6 +269,7 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
                   team={team}
                   active={isTeamActive(team.id)}
                   online={onlineCounts[team.id] || 0}
+                  avatarUrl={team.avatar ? avatarUrls[team.avatar] : ''}
                 />
               ))
             )}
@@ -244,18 +291,22 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
 
 export default Sidebar
 
-const TeamListItem = React.memo(function TeamListItem({ team, active, online }) {
+const TeamListItem = React.memo(function TeamListItem({ team, active, online, avatarUrl }) {
   return (
     <Link
       to={`/chat/${team.id}`}
       className={`flex items-center space-x-3 px-3 py-2 rounded-lg transition-colors ${
         active
-          ? 'bg-primary-50 text-primary-700 border border-primary-200'
-          : 'text-gray-700 hover:bg-gray-50'
+          ? 'bg-primary-50 text-primary-700 border border-primary-200 dark:bg-gray-700 dark:text-primary-100 dark:border-primary-300'
+          : 'text-gray-700 hover:bg-gray-50 dark:text-gray-200 dark:hover:bg-gray-700 dark:hover:border-gray-600 border border-transparent'
       }`}
     >
-      <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-500 rounded-lg flex items-center justify-center">
-        <Users className="w-4 h-4 text-white" />
+      <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-500 rounded-lg flex items-center justify-center overflow-hidden">
+        {avatarUrl ? (
+          <img src={avatarUrl} alt={team.name} className="w-full h-full object-cover" />
+        ) : (
+          <Users className="w-4 h-4 text-white" />
+        )}
       </div>
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium truncate">{team.name}</p>

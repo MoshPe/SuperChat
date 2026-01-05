@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import api from '../services/api'
 import ManageMembersModal from '../components/ManageMembersModal'
+import TeamSettingsModal from '../components/TeamSettingsModal'
 
 const Chat = () => {
   const { teamId } = useParams()
@@ -34,11 +35,14 @@ const Chat = () => {
   const [showTeamMenu, setShowTeamMenu] = useState(false)
   const typingTimeoutsRef = useRef(new Map())
   const [showManageMembers, setShowManageMembers] = useState(false)
+  const [showTeamSettings, setShowTeamSettings] = useState(false)
   const [hoveredMessageId, setHoveredMessageId] = useState(null)
   const [openMenuId, setOpenMenuId] = useState(null)
   const shouldReconnectRef = useRef(true)
   const [removalNotice, setRemovalNotice] = useState('')
   const { setServerDown } = useStatus()
+  const [teamAvatarUrl, setTeamAvatarUrl] = useState('')
+  const teamAvatarObjRef = useRef(null)
 
   const checkMembership = async () => {
     try {
@@ -119,6 +123,41 @@ const Chat = () => {
       Object.values(imageUrlsRef.current).forEach(url => URL.revokeObjectURL(url))
     }
   }, [])
+
+  // Load team avatar (protected endpoint) to use as img src
+  useEffect(() => {
+    let cancelled = false
+    const loadAvatar = async () => {
+      if (!team?.avatar) {
+        setTeamAvatarUrl('')
+        return
+      }
+      let path = team.avatar
+      if (path.startsWith('/api/')) {
+        path = path.replace(/^\/api/, '')
+      }
+      try {
+        const res = await api.get(path, { responseType: 'blob' })
+        const url = URL.createObjectURL(res.data)
+        if (teamAvatarObjRef.current) {
+          URL.revokeObjectURL(teamAvatarObjRef.current)
+        }
+        teamAvatarObjRef.current = url
+        if (!cancelled) setTeamAvatarUrl(url)
+      } catch (err) {
+        console.error('Failed to load team avatar', err)
+        setTeamAvatarUrl('')
+      }
+    }
+    loadAvatar()
+    return () => {
+      cancelled = true
+      if (teamAvatarObjRef.current) {
+        URL.revokeObjectURL(teamAvatarObjRef.current)
+        teamAvatarObjRef.current = null
+      }
+    }
+  }, [team?.avatar])
 
   const handleRemoved = (reason) => {
     shouldReconnectRef.current = false
@@ -421,6 +460,35 @@ const Chat = () => {
     }
   }
 
+  const saveTeamSettings = async (payload) => {
+    try {
+      const res = await api.put(`/teams/${teamId}`, payload)
+      setTeam(res.data.data)
+      setShowTeamSettings(false)
+    } catch (error) {
+      console.error('Failed to update team:', error)
+    }
+  }
+
+  const deleteTeam = async () => {
+    if (!window.confirm('Are you sure you want to delete this team? This cannot be undone.')) return
+    try {
+      await api.delete(`/teams/${teamId}`)
+      navigate('/dashboard')
+    } catch (error) {
+      console.error('Failed to delete team:', error)
+    }
+  }
+
+  const uploadTeamAvatar = async (file) => {
+    const formData = new FormData()
+    formData.append('file', file)
+    const res = await api.post(`/upload?team_id=${teamId}`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    return res.data?.data?.url
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-96">
@@ -445,15 +513,15 @@ const Chat = () => {
   }
 
   return (
-    <div className="h-[calc(100vh-8rem)] flex flex-col">
+    <div className="flex flex-col flex-1 min-h-0 h-full dark:bg-gray-900 overflow-hidden">
       {removalNotice && (
         <div className="fixed inset-0 bg-gray-900 bg-opacity-60 z-50 flex items-center justify-center">
-          <div className="bg-white rounded-2xl shadow-2xl border border-gray-200 max-w-sm w-full mx-4 p-6 text-center">
+          <div className="bg-white dark:bg-gray-800 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 max-w-sm w-full mx-4 p-6 text-center">
             <div className="mx-auto mb-4 w-12 h-12 rounded-full bg-red-100 text-red-600 flex items-center justify-center text-xl font-bold">
               !
             </div>
-            <h3 className="text-lg font-semibold text-gray-900 mb-2">Removed from team</h3>
-            <p className="text-sm text-gray-600 mb-4">{removalNotice}</p>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-gray-100 mb-2">Removed from team</h3>
+            <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">{removalNotice}</p>
             <button
               onClick={() => navigate('/dashboard')}
               className="w-full btn-primary py-2"
@@ -464,16 +532,20 @@ const Chat = () => {
         </div>
       )}
       {/* Team header */}
-      <div className="bg-white border-b border-gray-200 p-4">
+      <div className="bg-white border-b border-gray-200 dark:bg-gray-800 dark:border-gray-700 p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-gradient-to-br from-gray-400 to-gray-500 rounded-lg flex items-center justify-center">
-              <Users className="w-5 h-5 text-white" />
+            <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-gray-400 to-gray-500 flex items-center justify-center overflow-hidden">
+              {teamAvatarUrl ? (
+                <img src={teamAvatarUrl} alt={team.name} className="w-full h-full object-cover" />
+              ) : (
+                <Users className="w-5 h-5 text-white" />
+              )}
             </div>
             <div>
-              <h1 className="text-lg font-semibold text-gray-900">{team.name}</h1>
+              <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{team.name}</h1>
               {team.description && (
-                <p className="text-sm text-gray-500">{team.description}</p>
+                <p className="text-sm text-gray-500 dark:text-gray-300">{team.description}</p>
               )}
             </div>
           </div>
@@ -481,7 +553,7 @@ const Chat = () => {
           <div className="flex items-center space-x-2">
             {/* Connection status */}
             <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
-            <span className="text-xs text-gray-500">
+            <span className="text-xs text-gray-500 dark:text-gray-300">
               {isConnected ? 'Connected' : 'Disconnected'}
             </span>
             
@@ -489,25 +561,25 @@ const Chat = () => {
             <div className="relative">
               <button
                 onClick={() => setShowTeamMenu(!showTeamMenu)}
-                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+                className="p-2 text-gray-400 hover:text-gray-600 dark:text-gray-300 dark:hover:text-white rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
               >
                 <MoreVertical className="w-5 h-5" />
               </button>
               
               {showTeamMenu && (
-                <div className="absolute right-0 top-full mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-10">
+                <div className="absolute right-0 top-full mt-2 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 py-2 z-10">
                   {team && user?.id === team.owner_id && (
                     <button
                       onClick={() => { setShowTeamMenu(false); setShowManageMembers(true) }}
-                      className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center space-x-2"
+                      className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center space-x-2"
                     >
                       <UserPlus className="w-4 h-4" />
                       <span>Invite members</span>
                     </button>
                   )}
                   <button
-                    onClick={() => setShowTeamMenu(false)}
-                    className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center space-x-2"
+                    onClick={() => { setShowTeamMenu(false); setShowTeamSettings(true) }}
+                    className="w-full px-4 py-2 text-left text-sm text-gray-700 dark:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-700 flex items-center space-x-2"
                   >
                     <Settings className="w-4 h-4" />
                     <span>Team settings</span>
@@ -515,7 +587,7 @@ const Chat = () => {
                   <hr className="my-2" />
                   <button
                     onClick={leaveTeam}
-                    className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center space-x-2"
+                    className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/40 flex items-center space-x-2"
                   >
                     <LogOut className="w-4 h-4" />
                     <span>Leave team</span>
@@ -528,14 +600,14 @@ const Chat = () => {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-hide">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-3 custom-scrollbar">
         {messages.length === 0 ? (
           <div className="text-center py-12">
             <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4">
               <Users className="w-8 h-8 text-gray-400" />
             </div>
-            <h3 className="text-lg font-medium text-gray-900 mb-2">No messages yet</h3>
-            <p className="text-gray-500">Start the conversation by sending a message!</p>
+            <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">No messages yet</h3>
+            <p className="text-gray-500 dark:text-gray-300">Start the conversation by sending a message!</p>
           </div>
         ) : (
           messages.map((message) => (
@@ -577,7 +649,7 @@ const Chat = () => {
                   </div>
                   )
                 })()}
-                <div className={`mt-1 text-xs text-gray-500 ${message.user_id === user.id ? 'text-right' : ''}`}>
+                <div className={`mt-1 text-xs text-gray-500 dark:text-gray-300 ${message.user_id === user.id ? 'text-right' : ''}`}>
                   <span>{message.name || message.username}</span>
                   <span className="mx-2">&middot;</span>
                   <span>{formatTime(message.created_at || message.timestamp)}</span>
@@ -614,16 +686,16 @@ const Chat = () => {
       </div>
 
       {/* Message input */}
-      <div className="bg-white border-t border-gray-200 p-4 sticky bottom-0">
+      <div className="shrink-0 bg-white border-t border-gray-200 dark:bg-gray-800 dark:border-gray-700 p-4 pt-3 pb-3">
         <div className="max-w-5xl mx-auto w-full space-y-3">
           {pendingPreview && (
-            <div className="flex items-start space-x-3 rounded-lg border border-gray-200 p-3 bg-gray-50">
-              <div className="w-24 h-24 overflow-hidden rounded-md bg-white border">
+            <div className="flex items-start space-x-3 rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-900">
+              <div className="w-24 h-24 overflow-hidden rounded-md bg-white dark:bg-gray-800 border dark:border-gray-700">
                 <img src={pendingPreview} alt="preview" className="w-full h-full object-cover" />
               </div>
               <div className="flex-1">
-                <p className="text-sm text-gray-700">Image ready to send</p>
-                <p className="text-xs text-gray-500">Press Send to upload with your next message.</p>
+                <p className="text-sm text-gray-700 dark:text-gray-100">Image ready to send</p>
+                <p className="text-xs text-gray-500 dark:text-gray-300">Press Send to upload with your next message.</p>
               </div>
               <button
                 onClick={() => {
@@ -631,7 +703,7 @@ const Chat = () => {
                   setPendingPreview(null)
                   setPendingImage(null)
                 }}
-                className="text-gray-500 hover:text-red-500 text-sm"
+                className="text-gray-500 dark:text-gray-300 hover:text-red-500 text-sm"
               >
                 Clear
               </button>
@@ -684,12 +756,22 @@ const Chat = () => {
           ownerId={team.owner_id}
         />
       )}
+      {team && (
+        <TeamSettingsModal
+          isOpen={showTeamSettings}
+          onClose={() => setShowTeamSettings(false)}
+          team={team}
+          onSave={saveTeamSettings}
+          onDelete={deleteTeam}
+          onLeave={() => { setShowTeamSettings(false); leaveTeam() }}
+          isOwner={user?.id === team.owner_id}
+          onUploadAvatar={uploadTeamAvatar}
+        />
+      )}
     </div>
   )
 }
 
 export default Chat
-
-
 
 

@@ -216,6 +216,78 @@ func getUserTeams(userID string) ([]*Team, error) {
 	return teams, err
 }
 
+func updateTeam(team *Team) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("teams"))
+		if bucket == nil {
+			return fmt.Errorf("teams bucket not found")
+		}
+
+		teamData, err := team.ToJSON()
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(team.ID), teamData)
+	})
+}
+
+// deleteTeam removes the team record and related memberships, messages, and uploads
+func deleteTeam(teamID string) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		teamsB := tx.Bucket([]byte("teams"))
+		membersB := tx.Bucket([]byte("team_members"))
+		messagesB := tx.Bucket([]byte("messages"))
+		uploadsB := tx.Bucket([]byte("uploads"))
+		uploadDataB := tx.Bucket([]byte("upload_data"))
+		if teamsB == nil || membersB == nil || messagesB == nil || uploadsB == nil || uploadDataB == nil {
+			return fmt.Errorf("required buckets not found")
+		}
+
+		// delete team record
+		if err := teamsB.Delete([]byte(teamID)); err != nil {
+			return err
+		}
+
+		// delete memberships for this team
+		mc := membersB.Cursor()
+		for k, v := mc.First(); k != nil; k, v = mc.Next() {
+			var member TeamMember
+			if err := json.Unmarshal(v, &member); err != nil {
+				continue
+			}
+			if member.TeamID == teamID {
+				_ = membersB.Delete(k)
+			}
+		}
+
+		// delete messages for this team
+		msgC := messagesB.Cursor()
+		for k, v := msgC.First(); k != nil; k, v = msgC.Next() {
+			var m Message
+			if err := json.Unmarshal(v, &m); err != nil {
+				continue
+			}
+			if m.TeamID == teamID {
+				_ = messagesB.Delete(k)
+			}
+		}
+
+		// delete uploads scoped to this team
+		upC := uploadsB.Cursor()
+		for k, v := upC.First(); k != nil; k, v = upC.Next() {
+			var meta UploadMeta
+			if err := json.Unmarshal(v, &meta); err != nil {
+				continue
+			}
+			if meta.TeamID == teamID {
+				_ = uploadsB.Delete(k)
+				_ = uploadDataB.Delete(k)
+			}
+		}
+		return nil
+	})
+}
+
 // Database operations for team members
 func addTeamMember(member *TeamMember) error {
 	return db.Update(func(tx *bbolt.Tx) error {

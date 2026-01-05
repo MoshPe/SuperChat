@@ -328,6 +328,74 @@ func handleGetTeam(w http.ResponseWriter, r *http.Request) {
 	writeSuccessResponse(w, team, "Team retrieved successfully")
 }
 
+func handleUpdateTeam(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	teamID := vars["id"]
+	userID, _ := getUserFromContext(r)
+
+	if !isTeamOwner(teamID, userID) {
+		writeErrorResponse(w, http.StatusForbidden, "Only team owner can update the team")
+		return
+	}
+
+	team, err := getTeamByID(teamID)
+	if err != nil {
+		writeErrorResponse(w, http.StatusNotFound, "Team not found")
+		return
+	}
+
+	var body struct {
+		Name        *string `json:"name"`
+		Description *string `json:"description"`
+		Avatar      *string `json:"avatar"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+
+	if body.Name != nil {
+		name := strings.TrimSpace(*body.Name)
+		if name == "" {
+			writeErrorResponse(w, http.StatusBadRequest, "Team name cannot be empty")
+			return
+		}
+		team.Name = name
+	}
+	if body.Description != nil {
+		team.Description = strings.TrimSpace(*body.Description)
+	}
+	if body.Avatar != nil {
+		team.Avatar = strings.TrimSpace(*body.Avatar)
+	}
+	team.UpdatedAt = time.Now()
+
+	if err := updateTeam(team); err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Failed to update team")
+		return
+	}
+
+	writeSuccessResponse(w, team, "Team updated successfully")
+}
+
+func handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	teamID := vars["id"]
+	userID, _ := getUserFromContext(r)
+
+	if !isTeamOwner(teamID, userID) {
+		writeErrorResponse(w, http.StatusForbidden, "Only team owner can delete the team")
+		return
+	}
+
+	if err := deleteTeam(teamID); err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Failed to delete team")
+		return
+	}
+
+	writeSuccessResponse(w, nil, "Team deleted successfully")
+}
+
 // List all users (id, username) - for owner to pick members
 func handleListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := getAllUsers()

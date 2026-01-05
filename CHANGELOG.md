@@ -11,3 +11,11 @@
 - Optimized sidebar polling (change detection, 2s interval) and reduced flicker.
 - Added paste preview and sticky input tweaks; updated UI labels to use display names.
 - Added favicon logo for browser tab.
+
+## 2026-01-05
+
+- Added dark theme with toggle and global styling adjustments (chat, sidebar, dashboard, auth screens).
+- Introduced team settings modal (edit name/description/avatar, leave/delete), avatar upload/preview/removal with protected fetches.
+- Surfaced team avatars across chat header, sidebar, dashboard; cleaned cache on updates/removals.
+- Refined chat layout: contained scrolling with themed scrollbar, input docked to bottom.
+- Fixed dashboard stats: larger message window, active teams based on online presence; improved team hover/hover states in dark mode.

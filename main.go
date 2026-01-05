@@ -98,6 +98,8 @@ func main() {
 	api.HandleFunc("/teams", authMiddleware(handleGetTeams)).Methods("GET")
 	api.HandleFunc("/teams/online", authMiddleware(handleGetOnlineCounts)).Methods("GET")
 	api.HandleFunc("/teams/{id}", authMiddleware(handleGetTeam)).Methods("GET")
+	api.HandleFunc("/teams/{id}", authMiddleware(handleUpdateTeam)).Methods("PUT")
+	api.HandleFunc("/teams/{id}", authMiddleware(handleDeleteTeam)).Methods("DELETE")
 	api.HandleFunc("/teams/{id}/members", authMiddleware(handleGetTeamMembers)).Methods("GET")
 	api.HandleFunc("/teams/{id}/members", authMiddleware(handleAddTeamMember)).Methods("POST")
 	api.HandleFunc("/teams/{id}/members/{userId}", authMiddleware(handleRemoveTeamMember)).Methods("DELETE")
@@ -165,6 +167,6 @@ func main() {
 
 	bindHost := *host
 	addr := fmt.Sprintf("%s:%d", bindHost, *port)
-	fmt.Printf("\"Server starting on http://%s:%d/\n", bindHost, *port)
+	fmt.Printf("Server starting on http://%s:%d/\n", bindHost, *port)
 	log.Fatal(http.ListenAndServe(addr, r))
 }
