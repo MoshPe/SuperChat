@@ -176,6 +176,8 @@ func handleUpdateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	broadcastUserProfileUpdated(user.ID, user.Username, user.Name)
+
 	// Remove password from response
 	user.Password = ""
 	writeSuccessResponse(w, user, "Profile updated successfully")
@@ -589,6 +591,61 @@ func handleLeaveTeam(w http.ResponseWriter, r *http.Request) {
 	writeSuccessResponse(w, nil, "Successfully left team")
 }
 
+func handleTransferOwnership(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	teamID := vars["id"]
+	userID, _ := getUserFromContext(r)
+
+	if _, err := getTeamByID(teamID); err != nil {
+		writeErrorResponse(w, http.StatusNotFound, "Team not found")
+		return
+	}
+	if !isTeamOwner(teamID, userID) {
+		writeErrorResponse(w, http.StatusForbidden, "Only the team owner can transfer ownership")
+		return
+	}
+
+	var req struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErrorResponse(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	req.UserID = strings.TrimSpace(req.UserID)
+	if req.UserID == "" {
+		writeErrorResponse(w, http.StatusBadRequest, "Target user is required")
+		return
+	}
+	if req.UserID == userID {
+		writeErrorResponse(w, http.StatusBadRequest, "Cannot transfer ownership to yourself")
+		return
+	}
+
+	if err := transferTeamOwnership(teamID, userID, req.UserID); err != nil {
+		switch err.Error() {
+		case "team not found":
+			writeErrorResponse(w, http.StatusNotFound, "Team not found")
+		case "new owner must be an existing team member":
+			writeErrorResponse(w, http.StatusBadRequest, "New owner must be an existing team member")
+		case "forbidden":
+			writeErrorResponse(w, http.StatusForbidden, "Only the team owner can transfer ownership")
+		case "cannot transfer ownership to yourself":
+			writeErrorResponse(w, http.StatusBadRequest, "Cannot transfer ownership to yourself")
+		default:
+			writeErrorResponse(w, http.StatusInternalServerError, "Failed to transfer ownership")
+		}
+		return
+	}
+
+	team, err := getTeamByID(teamID)
+	if err != nil {
+		writeErrorResponse(w, http.StatusInternalServerError, "Ownership transferred but failed to load team")
+		return
+	}
+	writeSuccessResponse(w, team, "Ownership transferred successfully")
+}
+
 // Chat handlers
 func handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -614,6 +671,34 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeErrorResponse(w, http.StatusInternalServerError, "Failed to get messages")
 		return
+	}
+
+	// Resolve current display names so profile renames are reflected after refresh/reconnect.
+	nameByUserID := make(map[string]string)
+	for _, m := range messages {
+		if m == nil || m.UserID == "" {
+			continue
+		}
+		if _, ok := nameByUserID[m.UserID]; ok {
+			continue
+		}
+		u, err := getUserByID(m.UserID)
+		if err != nil || u == nil {
+			continue
+		}
+		displayName := strings.TrimSpace(u.Name)
+		if displayName == "" {
+			displayName = u.Username
+		}
+		nameByUserID[m.UserID] = displayName
+	}
+	for _, m := range messages {
+		if m == nil {
+			continue
+		}
+		if displayName, ok := nameByUserID[m.UserID]; ok && displayName != "" {
+			m.Username = displayName
+		}
 	}
 
 	writeSuccessResponse(w, messages, "Messages retrieved successfully")
@@ -659,7 +744,7 @@ func handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	writeSuccessResponse(w, message, "Message sent successfully")
 }
 
-// Delete a message (author or team owner)
+// Delete a message (author only)
 func handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	teamID := vars["id"]

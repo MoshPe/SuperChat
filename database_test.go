@@ -103,3 +103,18 @@ func TestGetTeamMessagesOrdersByCreatedAtAndLimitsLatest(t *testing.T) {
 		}
 	})
 }
+
+func TestSortMessagesChronologicallyBreaksTimestampTiesByID(t *testing.T) {
+	ts := time.Now()
+	msgs := []*Message{
+		{ID: "b", CreatedAt: ts},
+		{ID: "a", CreatedAt: ts},
+		{ID: "c", CreatedAt: ts.Add(time.Second)},
+	}
+
+	sortMessagesChronologically(msgs)
+
+	if msgs[0].ID != "a" || msgs[1].ID != "b" || msgs[2].ID != "c" {
+		t.Fatalf("expected deterministic order [a b c], got [%s %s %s]", msgs[0].ID, msgs[1].ID, msgs[2].ID)
+	}
+}

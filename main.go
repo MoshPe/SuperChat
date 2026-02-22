@@ -1,6 +1,7 @@
 package main
 
 import (
+	svc "SuperChat/internal/service"
 	"SuperChat/internal/store"
 	"embed"
 	"errors"
@@ -92,8 +93,8 @@ func main() {
 	}
 
 	// Start TTL janitors (configurable retention TTL, run hourly)
-	startMessageTTLJanitor(retentionTTL, 1*time.Minute)
-	startUploadTTLJanitor(retentionTTL, 1*time.Minute)
+	startMessageTTLJanitor(retentionTTL, 1*time.Hour)
+	startUploadTTLJanitor(retentionTTL, 1*time.Hour)
 
 	// Create router
 	r := mux.NewRouter()
@@ -115,15 +116,16 @@ func main() {
 	api.HandleFunc("/user/password", authMiddleware(handleChangePassword)).Methods("PUT")
 
 	// Team routes (place static paths before variable {id} routes)
-	api.HandleFunc("/teams", authMiddleware(handleCreateTeam)).Methods("POST")
-	api.HandleFunc("/teams", authMiddleware(handleGetTeams)).Methods("GET")
+	api.HandleFunc("/teams", authMiddleware(apiServer.HandleCreateTeam)).Methods("POST")
+	api.HandleFunc("/teams", authMiddleware(apiServer.HandleGetTeams)).Methods("GET")
 	api.HandleFunc("/teams/online", authMiddleware(handleGetOnlineCounts)).Methods("GET")
-	api.HandleFunc("/teams/{id}", authMiddleware(handleGetTeam)).Methods("GET")
-	api.HandleFunc("/teams/{id}", authMiddleware(handleUpdateTeam)).Methods("PUT")
-	api.HandleFunc("/teams/{id}", authMiddleware(handleDeleteTeam)).Methods("DELETE")
+	api.HandleFunc("/teams/{id}", authMiddleware(apiServer.HandleGetTeam)).Methods("GET")
+	api.HandleFunc("/teams/{id}", authMiddleware(apiServer.HandleUpdateTeam)).Methods("PUT")
+	api.HandleFunc("/teams/{id}", authMiddleware(apiServer.HandleDeleteTeam)).Methods("DELETE")
 	api.HandleFunc("/teams/{id}/members", authMiddleware(handleGetTeamMembers)).Methods("GET")
 	api.HandleFunc("/teams/{id}/members", authMiddleware(handleAddTeamMember)).Methods("POST")
 	api.HandleFunc("/teams/{id}/members/{userId}", authMiddleware(handleRemoveTeamMember)).Methods("DELETE")
+	api.HandleFunc("/teams/{id}/transfer-ownership", authMiddleware(handleTransferOwnership)).Methods("POST")
 	api.HandleFunc("/teams/{id}/join", authMiddleware(handleJoinTeam)).Methods("POST")
 	api.HandleFunc("/teams/{id}/leave", authMiddleware(handleLeaveTeam)).Methods("POST")
 
@@ -188,20 +190,33 @@ func main() {
 	log.Fatal(http.ListenAndServe(addr, r))
 }
 
-func newHTTPAPIDeps(userStore store.UserStore) httpapi.HandlerDeps {
+func newHTTPAPIDeps(boltStore *store.BoltStore) httpapi.HandlerDeps {
+	teamService := svc.NewTeamService(svc.TeamServiceDeps{
+		Teams:         boltStore,
+		IsTeamMember:  isTeamMember,
+		IsTeamOwner:   isTeamOwner,
+		AddTeamMember: addTeamMember,
+	})
+
 	return httpapi.HandlerDeps{
 		AuthMiddleware: authMiddleware,
 
-		HandleRegister:  handleRegister,
-		HandleLogin:     handleLogin,
-		HandleLogout:    handleLogout,
-		HandleGetTeams:  handleGetTeams,
-		HandleGetUpload: handleGetUpload,
+		HandleRegister:   handleRegister,
+		HandleLogin:      handleLogin,
+		HandleLogout:     handleLogout,
+		HandleCreateTeam: handleCreateTeam,
+		HandleGetTeams:   handleGetTeams,
+		HandleGetTeam:    handleGetTeam,
+		HandleUpdateTeam: handleUpdateTeam,
+		HandleDeleteTeam: handleDeleteTeam,
+		HandleGetUpload:  handleGetUpload,
+
+		TeamCore: teamService,
 
 		HashPassword:      hashPassword,
 		CheckPassword:     checkPassword,
-		CreateUser:        userStore.CreateUser,
-		GetUserByUsername: userStore.GetUserByUsername,
+		CreateUser:        boltStore.CreateUser,
+		GetUserByUsername: boltStore.GetUserByUsername,
 		GenerateToken:     generateToken,
 		IsUsernameExists: func(err error) bool {
 			return errors.Is(err, store.ErrUsernameExists) || errors.Is(err, errUsernameExists)

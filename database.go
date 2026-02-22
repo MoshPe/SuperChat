@@ -232,6 +232,88 @@ func updateTeam(team *Team) error {
 	})
 }
 
+func transferTeamOwnership(teamID, currentOwnerID, newOwnerID string) error {
+	return db.Update(func(tx *bbolt.Tx) error {
+		teamsBucket := tx.Bucket([]byte("teams"))
+		membersBucket := tx.Bucket([]byte("team_members"))
+		if teamsBucket == nil || membersBucket == nil {
+			return fmt.Errorf("required buckets not found")
+		}
+
+		teamData := teamsBucket.Get([]byte(teamID))
+		if teamData == nil {
+			return fmt.Errorf("team not found")
+		}
+
+		var team Team
+		if err := json.Unmarshal(teamData, &team); err != nil {
+			return err
+		}
+		if team.OwnerID != currentOwnerID {
+			return fmt.Errorf("forbidden")
+		}
+		if newOwnerID == currentOwnerID {
+			return fmt.Errorf("cannot transfer ownership to yourself")
+		}
+
+		var newOwnerMemberKey []byte
+		var oldOwnerMemberKey []byte
+		c := membersBucket.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var member TeamMember
+			if err := json.Unmarshal(v, &member); err != nil {
+				continue
+			}
+			if member.TeamID != teamID {
+				continue
+			}
+			if member.UserID == newOwnerID {
+				newOwnerMemberKey = append([]byte(nil), k...)
+			}
+			if member.UserID == currentOwnerID {
+				oldOwnerMemberKey = append([]byte(nil), k...)
+			}
+		}
+		if newOwnerMemberKey == nil {
+			return fmt.Errorf("new owner must be an existing team member")
+		}
+
+		team.OwnerID = newOwnerID
+		team.UpdatedAt = time.Now()
+		updatedTeamData, err := team.ToJSON()
+		if err != nil {
+			return err
+		}
+		if err := teamsBucket.Put([]byte(team.ID), updatedTeamData); err != nil {
+			return err
+		}
+
+		// Keep team_members roles in sync with owner_id when memberships exist.
+		if raw := membersBucket.Get(newOwnerMemberKey); raw != nil {
+			var m TeamMember
+			if err := json.Unmarshal(raw, &m); err == nil {
+				m.Role = "owner"
+				if data, err := m.ToJSON(); err == nil {
+					_ = membersBucket.Put(newOwnerMemberKey, data)
+				}
+			}
+		}
+		if oldOwnerMemberKey != nil && string(oldOwnerMemberKey) != string(newOwnerMemberKey) {
+			if raw := membersBucket.Get(oldOwnerMemberKey); raw != nil {
+				var m TeamMember
+				if err := json.Unmarshal(raw, &m); err == nil && m.Role == "owner" {
+					m.Role = "member"
+					if data, err := m.ToJSON(); err == nil {
+						_ = membersBucket.Put(oldOwnerMemberKey, data)
+					}
+				}
+			}
+		}
+
+		return nil
+	})
+}
+
 // deleteTeam removes the team record and related memberships, messages, and uploads
 func deleteTeam(teamID string) error {
 	return db.Update(func(tx *bbolt.Tx) error {
@@ -421,9 +503,7 @@ func getTeamMessages(teamID string, limit int) ([]*Message, error) {
 			}
 		}
 
-		sort.Slice(messages, func(i, j int) bool {
-			return messages[i].CreatedAt.Before(messages[j].CreatedAt)
-		})
+		sortMessagesChronologically(messages)
 		if len(messages) > limit {
 			messages = messages[len(messages)-limit:]
 		}
@@ -432,6 +512,15 @@ func getTeamMessages(teamID string, limit int) ([]*Message, error) {
 	})
 
 	return messages, err
+}
+
+func sortMessagesChronologically(messages []*Message) {
+	sort.Slice(messages, func(i, j int) bool {
+		if messages[i].CreatedAt.Equal(messages[j].CreatedAt) {
+			return messages[i].ID < messages[j].ID
+		}
+		return messages[i].CreatedAt.Before(messages[j].CreatedAt)
+	})
 }
 
 // getMessageByID returns a single message by ID

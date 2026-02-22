@@ -14,13 +14,14 @@ import (
 
 // Client represents a WebSocket client
 type Client struct {
-	ID       string
-	UserID   string
-	Username string
-	TeamID   string
-	Conn     *websocket.Conn
-	Send     chan []byte
-	once     sync.Once
+	ID              string
+	UserID          string
+	Username        string // display name used in chat UI
+	AccountUsername string // immutable account username
+	TeamID          string
+	Conn            *websocket.Conn
+	Send            chan []byte
+	once            sync.Once
 }
 
 // TeamRoom represents a chat room for a team
@@ -58,13 +59,16 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userID, username := claims.UserID, claims.Username
-	displayName := claims.Name
-	if displayName == "" {
-		if u, err := getUserByID(userID); err == nil && u.Name != "" {
+	displayName := username
+	if u, err := getUserByID(userID); err == nil && u != nil {
+		if u.Name != "" {
 			displayName = u.Name
-		} else {
-			displayName = username
 		}
+		if u.Username != "" {
+			username = u.Username
+		}
+	} else if claims.Name != "" {
+		displayName = claims.Name
 	}
 
 	// Check if user is member of the team
@@ -82,12 +86,13 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Create client
 	client := &Client{
-		ID:       fmt.Sprintf("%s-%s", userID, teamID),
-		UserID:   userID,
-		Username: displayName,
-		TeamID:   teamID,
-		Conn:     conn,
-		Send:     make(chan []byte, 256),
+		ID:              fmt.Sprintf("%s-%s", userID, teamID),
+		UserID:          userID,
+		Username:        displayName,
+		AccountUsername: username,
+		TeamID:          teamID,
+		Conn:            conn,
+		Send:            make(chan []byte, 256),
 	}
 
 	// Get or create team room
@@ -248,7 +253,7 @@ func (c *Client) handleChatMessage(room *TeamRoom, wsMessage WebSocketMessage) {
 		Payload: map[string]interface{}{
 			"id":        message.ID,
 			"user_id":   message.UserID,
-			"username":  c.Username,
+			"username":  c.accountUsername(),
 			"name":      c.Username,
 			"content":   message.Content,
 			"type":      message.Type,
@@ -264,7 +269,7 @@ func (c *Client) handleTyping(room *TeamRoom, wsMessage WebSocketMessage) {
 		Type: "typing",
 		Payload: map[string]interface{}{
 			"user_id":   c.UserID,
-			"username":  c.Username,
+			"username":  c.accountUsername(),
 			"name":      c.Username,
 			"timestamp": time.Now(),
 		},
@@ -301,7 +306,8 @@ func (c *Client) disconnect(room *TeamRoom) {
 			Type: "user_left",
 			Payload: map[string]interface{}{
 				"user_id":   c.UserID,
-				"username":  c.Username,
+				"username":  c.accountUsername(),
+				"name":      c.Username,
 				"timestamp": time.Now(),
 			},
 		}
@@ -318,6 +324,57 @@ func (c *Client) disconnect(room *TeamRoom) {
 			room.Mutex.RUnlock()
 		}
 	})
+}
+
+func (c *Client) accountUsername() string {
+	if c.AccountUsername != "" {
+		return c.AccountUsername
+	}
+	return c.Username
+}
+
+func broadcastUserProfileUpdated(userID, username, name string) {
+	displayName := name
+	if displayName == "" {
+		displayName = username
+	}
+
+	hub.Mutex.RLock()
+	rooms := make([]*TeamRoom, 0, len(hub.Rooms))
+	for _, room := range hub.Rooms {
+		rooms = append(rooms, room)
+	}
+	hub.Mutex.RUnlock()
+
+	for _, room := range rooms {
+		shouldBroadcast := isTeamMember(room.ID, userID)
+
+		room.Mutex.Lock()
+		for client := range room.Clients {
+			if client.UserID != userID {
+				continue
+			}
+			client.Username = displayName
+			if username != "" {
+				client.AccountUsername = username
+			}
+			shouldBroadcast = true
+		}
+		room.Mutex.Unlock()
+
+		if !shouldBroadcast {
+			continue
+		}
+		room.broadcast(WebSocketMessage{
+			Type: "user_profile_updated",
+			Payload: map[string]interface{}{
+				"user_id":   userID,
+				"username":  username,
+				"name":      displayName,
+				"timestamp": time.Now(),
+			},
+		}, nil)
+	}
 }
 
 // kickUserFromTeam notifies and disconnects a user from a team room if connected.

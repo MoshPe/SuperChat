@@ -78,6 +78,23 @@ func TestRouterRegistersTeamsRoute(t *testing.T) {
 	}
 }
 
+func TestRouterRegistersTeamByIDRoute(t *testing.T) {
+	r := NewRouter(HandlerDeps{
+		AuthMiddleware: func(next http.HandlerFunc) http.HandlerFunc { return next },
+		HandleGetTeam: func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusPartialContent)
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/teams/team-1", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusPartialContent {
+		t.Fatalf("expected team by id route handler to run, got status %d", rr.Code)
+	}
+}
+
 func TestRouterRegistersUploadDownloadRoute(t *testing.T) {
 	r := NewRouter(HandlerDeps{
 		HandleGetUpload: func(w http.ResponseWriter, r *http.Request) {

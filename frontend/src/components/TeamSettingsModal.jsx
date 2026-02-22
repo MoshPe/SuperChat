@@ -11,6 +11,7 @@ const TeamSettingsModal = ({
   onLeave,
   isOwner,
   onUploadAvatar,
+  onTeamUpdated,
 }) => {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -18,6 +19,11 @@ const TeamSettingsModal = ({
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [previewUrl, setPreviewUrl] = useState('')
+  const [members, setMembers] = useState([])
+  const [loadingMembers, setLoadingMembers] = useState(false)
+  const [transferTargetUserId, setTransferTargetUserId] = useState('')
+  const [transferring, setTransferring] = useState(false)
+  const [actionError, setActionError] = useState('')
   const fileInputRef = useRef(null)
   const previewObjectUrlRef = useRef('')
 
@@ -26,8 +32,46 @@ const TeamSettingsModal = ({
       setName(team.name || '')
       setDescription(team.description || '')
       setAvatar(team.avatar || '')
+      setActionError('')
     }
   }, [isOpen, team])
+
+  useEffect(() => {
+    let cancelled = false
+
+    const loadMembers = async () => {
+      if (!isOpen || !team?.id || !isOwner) {
+        if (!cancelled) {
+          setMembers([])
+          setTransferTargetUserId('')
+        }
+        return
+      }
+
+      setLoadingMembers(true)
+      try {
+        const res = await api.get(`/teams/${team.id}/members`)
+        if (cancelled) return
+        const list = Array.isArray(res.data?.data) ? res.data.data : []
+        setMembers(list)
+        const candidates = list.filter((m) => m.user_id !== team.owner_id)
+        setTransferTargetUserId((prev) => {
+          if (prev && candidates.some((m) => m.user_id === prev)) return prev
+          return candidates[0]?.user_id || ''
+        })
+      } catch (err) {
+        console.error('Failed to load team members', err)
+        if (!cancelled) setMembers([])
+      } finally {
+        if (!cancelled) setLoadingMembers(false)
+      }
+    }
+
+    loadMembers()
+    return () => {
+      cancelled = true
+    }
+  }, [isOpen, team?.id, team?.owner_id, isOwner])
 
   // Build a preview URL for secured uploads
   useEffect(() => {
@@ -117,9 +161,37 @@ const TeamSettingsModal = ({
     }
   }
 
-  const confirmLeave = () => {
+  const confirmLeave = async () => {
     if (window.confirm('Leave this team?')) {
-      onLeave()
+      setActionError('')
+      try {
+        await onLeave()
+      } catch (err) {
+        setActionError(err?.message || 'Failed to leave team')
+      }
+    }
+  }
+
+  const handleTransferOwnership = async () => {
+    if (!team?.id || !transferTargetUserId || transferring) return
+    if (!window.confirm('Transfer team ownership to the selected member?')) return
+
+    setTransferring(true)
+    setActionError('')
+    try {
+      const res = await api.post(`/teams/${team.id}/transfer-ownership`, {
+        user_id: transferTargetUserId,
+      })
+      const updatedTeam = res.data?.data
+      if (updatedTeam && onTeamUpdated) {
+        onTeamUpdated(updatedTeam)
+      }
+    } catch (err) {
+      console.error('Failed to transfer ownership', err)
+      const msg = err.response?.data?.error || err.response?.data?.message || 'Failed to transfer ownership'
+      setActionError(msg)
+    } finally {
+      setTransferring(false)
     }
   }
 
@@ -213,10 +285,59 @@ const TeamSettingsModal = ({
             </button>
           </div>
 
+          {isOwner && (
+            <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
+              <div>
+                <h4 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Transfer ownership</h4>
+                <p className="text-xs text-gray-600 dark:text-gray-300">
+                  Transfer ownership to another existing member before leaving the team.
+                </p>
+              </div>
+              {loadingMembers ? (
+                <p className="text-sm text-gray-500 dark:text-gray-300">Loading members...</p>
+              ) : (
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <select
+                    className="input flex-1"
+                    value={transferTargetUserId}
+                    onChange={(e) => setTransferTargetUserId(e.target.value)}
+                    disabled={transferring || members.filter((m) => m.user_id !== team.owner_id).length === 0}
+                  >
+                    {members.filter((m) => m.user_id !== team.owner_id).length === 0 ? (
+                      <option value="">No eligible members</option>
+                    ) : (
+                      members
+                        .filter((m) => m.user_id !== team.owner_id)
+                        .map((member) => (
+                          <option key={member.user_id} value={member.user_id}>
+                            {(member.name || member.username)} ({member.username})
+                          </option>
+                        ))
+                    )}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={handleTransferOwnership}
+                    disabled={transferring || !transferTargetUserId}
+                    className="btn-outline disabled:opacity-50"
+                  >
+                    {transferring ? 'Transferring...' : 'Transfer ownership'}
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {actionError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-200">
+              {actionError}
+            </div>
+          )}
+
           <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between">
             <button
               type="button"
-              onClick={confirmLeave}
+              onClick={() => { void confirmLeave() }}
               className="btn-outline flex items-center space-x-2"
             >
               <LogOut className="w-4 h-4" />

@@ -300,7 +300,7 @@ const Chat = () => {
         break
       case 'typing':
         if (data.payload.user_id !== user.id) {
-          const name = data.payload.username
+          const name = data.payload.name || data.payload.username
           // Add to set
           setTypingUsers(prev => {
             const ns = new Set(prev)
@@ -321,6 +321,21 @@ const Chat = () => {
           typingTimeoutsRef.current.set(name, timer)
         }
         break
+      case 'user_profile_updated': {
+        const updatedUserId = data.payload?.user_id
+        if (!updatedUserId) break
+        const nextName = data.payload?.name || data.payload?.username
+        if (!nextName) break
+        setMessages(prev => prev.map(message => {
+          if (message.user_id !== updatedUserId) return message
+          return {
+            ...message,
+            name: nextName,
+            username: nextName,
+          }
+        }))
+        break
+      }
       default:
         console.log('Unknown message type:', data.type)
     }
@@ -454,9 +469,12 @@ const Chat = () => {
   const leaveTeam = async () => {
     try {
       await api.post(`/teams/${teamId}/leave`)
+      setShowTeamSettings(false)
       navigate('/dashboard')
     } catch (error) {
       console.error('Failed to leave team:', error)
+      const msg = error.response?.data?.error || error.response?.data?.message || 'Failed to leave team'
+      throw new Error(msg)
     }
   }
 
@@ -586,7 +604,11 @@ const Chat = () => {
                   </button>
                   <hr className="my-2" />
                   <button
-                    onClick={leaveTeam}
+                    onClick={() => {
+                      void leaveTeam().catch((err) => {
+                        window.alert(err?.message || 'Failed to leave team')
+                      })
+                    }}
                     className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 dark:hover:bg-red-900/40 flex items-center space-x-2"
                   >
                     <LogOut className="w-4 h-4" />
@@ -763,9 +785,10 @@ const Chat = () => {
           team={team}
           onSave={saveTeamSettings}
           onDelete={deleteTeam}
-          onLeave={() => { setShowTeamSettings(false); leaveTeam() }}
+          onLeave={leaveTeam}
           isOwner={user?.id === team.owner_id}
           onUploadAvatar={uploadTeamAvatar}
+          onTeamUpdated={setTeam}
         />
       )}
     </div>
@@ -773,4 +796,3 @@ const Chat = () => {
 }
 
 export default Chat
-
