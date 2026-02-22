@@ -5,6 +5,7 @@ import "SuperChat/internal/model"
 type UserStore interface {
 	CreateUser(user *model.User) error
 	GetUserByUsername(username string) (*model.User, error)
+	GetUserByID(userID string) (*model.User, error)
 }
 
 type TeamStore interface {
@@ -13,4 +14,9 @@ type TeamStore interface {
 	GetUserTeams(userID string) ([]*model.Team, error)
 	UpdateTeam(team *model.Team) error
 	DeleteTeam(teamID string) error
+	AddTeamMember(member *model.TeamMember) error
+	RemoveTeamMember(teamID, userID string) error
+	GetTeamMembers(teamID string) ([]*model.TeamMember, error)
+	IsTeamMember(teamID, userID string) (bool, error)
+	TransferTeamOwnership(teamID, currentOwnerID, newOwnerID string) error
 }

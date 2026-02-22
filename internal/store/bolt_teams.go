@@ -4,6 +4,7 @@ import (
 	"SuperChat/internal/model"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"go.etcd.io/bbolt"
 )
@@ -144,6 +145,168 @@ func (s *BoltStore) DeleteTeam(teamID string) error {
 			if meta.TeamID == teamID {
 				_ = uploadsB.Delete(k)
 				_ = uploadDataB.Delete(k)
+			}
+		}
+		return nil
+	})
+}
+
+func (s *BoltStore) AddTeamMember(member *model.TeamMember) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("team_members"))
+		if bucket == nil {
+			return fmt.Errorf("team_members bucket not found")
+		}
+
+		memberData, err := member.ToJSON()
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(member.ID), memberData)
+	})
+}
+
+func (s *BoltStore) RemoveTeamMember(teamID, userID string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("team_members"))
+		if bucket == nil {
+			return fmt.Errorf("team_members bucket not found")
+		}
+
+		c := bucket.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var member model.TeamMember
+			if err := json.Unmarshal(v, &member); err != nil {
+				continue
+			}
+			if member.TeamID == teamID && member.UserID == userID {
+				return bucket.Delete(k)
+			}
+		}
+		return fmt.Errorf("team membership not found")
+	})
+}
+
+func (s *BoltStore) GetTeamMembers(teamID string) ([]*model.TeamMember, error) {
+	var members []*model.TeamMember
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("team_members"))
+		if bucket == nil {
+			return fmt.Errorf("team_members bucket not found")
+		}
+		c := bucket.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var member model.TeamMember
+			if err := json.Unmarshal(v, &member); err != nil {
+				continue
+			}
+			if member.TeamID == teamID {
+				m := member
+				members = append(members, &m)
+			}
+		}
+		return nil
+	})
+	return members, err
+}
+
+func (s *BoltStore) IsTeamMember(teamID, userID string) (bool, error) {
+	var isMember bool
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("team_members"))
+		if bucket == nil {
+			return fmt.Errorf("team_members bucket not found")
+		}
+		c := bucket.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var member model.TeamMember
+			if err := json.Unmarshal(v, &member); err != nil {
+				continue
+			}
+			if member.TeamID == teamID && member.UserID == userID {
+				isMember = true
+				break
+			}
+		}
+		return nil
+	})
+	return isMember, err
+}
+
+func (s *BoltStore) TransferTeamOwnership(teamID, currentOwnerID, newOwnerID string) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		teamsBucket := tx.Bucket([]byte("teams"))
+		membersBucket := tx.Bucket([]byte("team_members"))
+		if teamsBucket == nil || membersBucket == nil {
+			return fmt.Errorf("required buckets not found")
+		}
+
+		teamData := teamsBucket.Get([]byte(teamID))
+		if teamData == nil {
+			return ErrTeamNotFound
+		}
+
+		var team model.Team
+		if err := json.Unmarshal(teamData, &team); err != nil {
+			return err
+		}
+		if team.OwnerID != currentOwnerID {
+			return fmt.Errorf("forbidden")
+		}
+		if newOwnerID == currentOwnerID {
+			return fmt.Errorf("cannot transfer ownership to yourself")
+		}
+
+		var newOwnerMemberKey []byte
+		var oldOwnerMemberKey []byte
+		c := membersBucket.Cursor()
+		for k, v := c.First(); k != nil; k, v = c.Next() {
+			var member model.TeamMember
+			if err := json.Unmarshal(v, &member); err != nil {
+				continue
+			}
+			if member.TeamID != teamID {
+				continue
+			}
+			if member.UserID == newOwnerID {
+				newOwnerMemberKey = append([]byte(nil), k...)
+			}
+			if member.UserID == currentOwnerID {
+				oldOwnerMemberKey = append([]byte(nil), k...)
+			}
+		}
+		if newOwnerMemberKey == nil {
+			return fmt.Errorf("new owner must be an existing team member")
+		}
+
+		team.OwnerID = newOwnerID
+		team.UpdatedAt = time.Now()
+		updatedTeamData, err := team.ToJSON()
+		if err != nil {
+			return err
+		}
+		if err := teamsBucket.Put([]byte(team.ID), updatedTeamData); err != nil {
+			return err
+		}
+
+		if raw := membersBucket.Get(newOwnerMemberKey); raw != nil {
+			var m model.TeamMember
+			if err := json.Unmarshal(raw, &m); err == nil {
+				m.Role = "owner"
+				if data, err := m.ToJSON(); err == nil {
+					_ = membersBucket.Put(newOwnerMemberKey, data)
+				}
+			}
+		}
+		if oldOwnerMemberKey != nil && string(oldOwnerMemberKey) != string(newOwnerMemberKey) {
+			if raw := membersBucket.Get(oldOwnerMemberKey); raw != nil {
+				var m model.TeamMember
+				if err := json.Unmarshal(raw, &m); err == nil && m.Role == "owner" {
+					m.Role = "member"
+					if data, err := m.ToJSON(); err == nil {
+						_ = membersBucket.Put(oldOwnerMemberKey, data)
+					}
+				}
 			}
 		}
 		return nil

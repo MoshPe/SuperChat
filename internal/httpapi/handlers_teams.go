@@ -16,6 +16,20 @@ func (s *Server) HandleGetTeams(w http.ResponseWriter, r *http.Request)   { s.ha
 func (s *Server) HandleGetTeam(w http.ResponseWriter, r *http.Request)    { s.handleGetTeam(w, r) }
 func (s *Server) HandleUpdateTeam(w http.ResponseWriter, r *http.Request) { s.handleUpdateTeam(w, r) }
 func (s *Server) HandleDeleteTeam(w http.ResponseWriter, r *http.Request) { s.handleDeleteTeam(w, r) }
+func (s *Server) HandleGetTeamMembers(w http.ResponseWriter, r *http.Request) {
+	s.handleGetTeamMembers(w, r)
+}
+func (s *Server) HandleAddTeamMember(w http.ResponseWriter, r *http.Request) {
+	s.handleAddTeamMember(w, r)
+}
+func (s *Server) HandleRemoveTeamMember(w http.ResponseWriter, r *http.Request) {
+	s.handleRemoveTeamMember(w, r)
+}
+func (s *Server) HandleJoinTeam(w http.ResponseWriter, r *http.Request)  { s.handleJoinTeam(w, r) }
+func (s *Server) HandleLeaveTeam(w http.ResponseWriter, r *http.Request) { s.handleLeaveTeam(w, r) }
+func (s *Server) HandleTransferOwnership(w http.ResponseWriter, r *http.Request) {
+	s.handleTransferOwnership(w, r)
+}
 
 func (s *Server) handleCreateTeam(w http.ResponseWriter, r *http.Request) {
 	if s.deps.TeamCore == nil {
@@ -150,6 +164,155 @@ func (s *Server) handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 	WriteSuccess(w, nil, "Team deleted successfully")
 }
 
+func (s *Server) handleGetTeamMembers(w http.ResponseWriter, r *http.Request) {
+	if s.deps.TeamCore == nil {
+		if s.deps.HandleGetTeamMembers != nil {
+			s.deps.HandleGetTeamMembers(w, r)
+			return
+		}
+		WriteError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	teamID := mux.Vars(r)["id"]
+	userID, _ := getUserFromContext(r)
+	members, err := s.deps.TeamCore.GetTeamMembers(teamID, userID)
+	if err != nil {
+		s.writeTeamCoreError(w, err,
+			map[error]string{service.ErrForbidden: "Access denied"},
+			"Failed to get team members",
+		)
+		return
+	}
+	WriteSuccess(w, members, "Team members retrieved successfully")
+}
+
+func (s *Server) handleAddTeamMember(w http.ResponseWriter, r *http.Request) {
+	if s.deps.TeamCore == nil {
+		if s.deps.HandleAddTeamMember != nil {
+			s.deps.HandleAddTeamMember(w, r)
+			return
+		}
+		WriteError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	teamID := mux.Vars(r)["id"]
+	userID, _ := getUserFromContext(r)
+	var body struct {
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Username == "" {
+		WriteError(w, http.StatusBadRequest, "Username is required")
+		return
+	}
+	targetID, err := s.deps.TeamCore.AddTeamMember(teamID, userID, body.Username)
+	if err != nil {
+		if s.writeTeamAddMemberError(w, err) {
+			return
+		}
+		WriteError(w, http.StatusInternalServerError, "Failed to add member")
+		return
+	}
+	WriteSuccess(w, map[string]string{"user_id": targetID}, "Member added successfully")
+}
+
+func (s *Server) handleRemoveTeamMember(w http.ResponseWriter, r *http.Request) {
+	if s.deps.TeamCore == nil {
+		if s.deps.HandleRemoveTeamMember != nil {
+			s.deps.HandleRemoveTeamMember(w, r)
+			return
+		}
+		WriteError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	vars := mux.Vars(r)
+	teamID := vars["id"]
+	targetUserID := vars["userId"]
+	userID, _ := getUserFromContext(r)
+	if err := s.deps.TeamCore.RemoveTeamMember(teamID, userID, targetUserID); err != nil {
+		if s.writeTeamRemoveMemberError(w, err) {
+			return
+		}
+		WriteError(w, http.StatusInternalServerError, "Failed to remove member")
+		return
+	}
+	if s.deps.KickUserFromTeam != nil {
+		s.deps.KickUserFromTeam(teamID, targetUserID, "You were removed from the team by an admin.")
+	}
+	WriteSuccess(w, nil, "Member removed successfully")
+}
+
+func (s *Server) handleJoinTeam(w http.ResponseWriter, r *http.Request) {
+	if s.deps.TeamCore == nil {
+		if s.deps.HandleJoinTeam != nil {
+			s.deps.HandleJoinTeam(w, r)
+			return
+		}
+		WriteError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	teamID := mux.Vars(r)["id"]
+	userID, _ := getUserFromContext(r)
+	team, err := s.deps.TeamCore.JoinTeam(teamID, userID)
+	if err != nil {
+		if s.writeTeamJoinError(w, err) {
+			return
+		}
+		WriteError(w, http.StatusInternalServerError, "Failed to join team")
+		return
+	}
+	WriteSuccess(w, team, "Successfully joined team")
+}
+
+func (s *Server) handleLeaveTeam(w http.ResponseWriter, r *http.Request) {
+	if s.deps.TeamCore == nil {
+		if s.deps.HandleLeaveTeam != nil {
+			s.deps.HandleLeaveTeam(w, r)
+			return
+		}
+		WriteError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	teamID := mux.Vars(r)["id"]
+	userID, _ := getUserFromContext(r)
+	if err := s.deps.TeamCore.LeaveTeam(teamID, userID); err != nil {
+		if s.writeTeamLeaveError(w, err) {
+			return
+		}
+		WriteError(w, http.StatusInternalServerError, "Failed to leave team")
+		return
+	}
+	WriteSuccess(w, nil, "Successfully left team")
+}
+
+func (s *Server) handleTransferOwnership(w http.ResponseWriter, r *http.Request) {
+	if s.deps.TeamCore == nil {
+		if s.deps.HandleTransferOwnership != nil {
+			s.deps.HandleTransferOwnership(w, r)
+			return
+		}
+		WriteError(w, http.StatusNotFound, "Not found")
+		return
+	}
+	teamID := mux.Vars(r)["id"]
+	userID, _ := getUserFromContext(r)
+	var body struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		WriteError(w, http.StatusBadRequest, "Invalid request body")
+		return
+	}
+	team, err := s.deps.TeamCore.TransferOwnership(teamID, userID, body.UserID)
+	if err != nil {
+		if s.writeTeamTransferOwnershipError(w, err) {
+			return
+		}
+		WriteError(w, http.StatusInternalServerError, "Failed to transfer ownership")
+		return
+	}
+	WriteSuccess(w, team, "Ownership transferred successfully")
+}
+
 func (s *Server) writeTeamCoreError(w http.ResponseWriter, err error, known map[error]string, fallback500 string) {
 	var ve *service.ValidationError
 	if errors.As(err, &ve) {
@@ -175,6 +338,91 @@ func (s *Server) writeTeamCoreError(w http.ResponseWriter, err error, known map[
 		fallback500 = "Internal server error"
 	}
 	WriteError(w, http.StatusInternalServerError, fallback500)
+}
+
+func (s *Server) writeTeamAddMemberError(w http.ResponseWriter, err error) bool {
+	var ve *service.ValidationError
+	if errors.As(err, &ve) {
+		if ve.Message == "User already a member" {
+			WriteError(w, http.StatusConflict, ve.Message)
+			return true
+		}
+		WriteError(w, http.StatusBadRequest, ve.Message)
+		return true
+	}
+	if errors.Is(err, service.ErrForbidden) {
+		WriteError(w, http.StatusForbidden, "Only team owner can add members")
+		return true
+	}
+	if errors.Is(err, service.ErrNotFound) {
+		WriteError(w, http.StatusNotFound, "User not found")
+		return true
+	}
+	return false
+}
+
+func (s *Server) writeTeamRemoveMemberError(w http.ResponseWriter, err error) bool {
+	var ve *service.ValidationError
+	if errors.As(err, &ve) {
+		WriteError(w, http.StatusBadRequest, ve.Message)
+		return true
+	}
+	if errors.Is(err, service.ErrForbidden) {
+		WriteError(w, http.StatusForbidden, "Only team owner can remove members")
+		return true
+	}
+	if errors.Is(err, service.ErrNotFound) {
+		WriteError(w, http.StatusNotFound, "User is not a member")
+		return true
+	}
+	return false
+}
+
+func (s *Server) writeTeamJoinError(w http.ResponseWriter, err error) bool {
+	var ve *service.ValidationError
+	if errors.As(err, &ve) {
+		if ve.Message == "Already a member of this team" {
+			WriteError(w, http.StatusConflict, ve.Message)
+			return true
+		}
+		WriteError(w, http.StatusBadRequest, ve.Message)
+		return true
+	}
+	if errors.Is(err, service.ErrNotFound) {
+		WriteError(w, http.StatusNotFound, "Team not found")
+		return true
+	}
+	return false
+}
+
+func (s *Server) writeTeamLeaveError(w http.ResponseWriter, err error) bool {
+	var ve *service.ValidationError
+	if errors.As(err, &ve) {
+		WriteError(w, http.StatusBadRequest, ve.Message)
+		return true
+	}
+	if errors.Is(err, service.ErrForbidden) {
+		WriteError(w, http.StatusForbidden, "Not a member of this team")
+		return true
+	}
+	return false
+}
+
+func (s *Server) writeTeamTransferOwnershipError(w http.ResponseWriter, err error) bool {
+	var ve *service.ValidationError
+	if errors.As(err, &ve) {
+		WriteError(w, http.StatusBadRequest, ve.Message)
+		return true
+	}
+	if errors.Is(err, service.ErrForbidden) {
+		WriteError(w, http.StatusForbidden, "Only the team owner can transfer ownership")
+		return true
+	}
+	if errors.Is(err, service.ErrNotFound) {
+		WriteError(w, http.StatusNotFound, "Team not found")
+		return true
+	}
+	return false
 }
 
 func getUserFromContext(r *http.Request) (string, string) {

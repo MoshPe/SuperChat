@@ -156,3 +156,124 @@ func TestBoltStoreDeleteTeamCascadesRelatedRecords(t *testing.T) {
 		}
 	})
 }
+
+func TestBoltStoreTeamMembershipOperations(t *testing.T) {
+	withTempBoltStore(t, func(s *BoltStore) {
+		owner := model.NewUser("owner", "Owner", "hashed")
+		memberUser := model.NewUser("member", "Member", "hashed")
+		if err := s.CreateUser(owner); err != nil {
+			t.Fatalf("CreateUser owner: %v", err)
+		}
+		if err := s.CreateUser(memberUser); err != nil {
+			t.Fatalf("CreateUser member: %v", err)
+		}
+
+		team := model.NewTeam("Team A", "", owner.ID)
+		if err := s.CreateTeam(team); err != nil {
+			t.Fatalf("CreateTeam: %v", err)
+		}
+
+		ownerMember := model.NewTeamMember(team.ID, owner.ID, "owner")
+		normalMember := model.NewTeamMember(team.ID, memberUser.ID, "member")
+		if err := s.AddTeamMember(ownerMember); err != nil {
+			t.Fatalf("AddTeamMember owner: %v", err)
+		}
+		if err := s.AddTeamMember(normalMember); err != nil {
+			t.Fatalf("AddTeamMember member: %v", err)
+		}
+
+		isMember, err := s.IsTeamMember(team.ID, memberUser.ID)
+		if err != nil {
+			t.Fatalf("IsTeamMember: %v", err)
+		}
+		if !isMember {
+			t.Fatal("expected member to be in team")
+		}
+
+		members, err := s.GetTeamMembers(team.ID)
+		if err != nil {
+			t.Fatalf("GetTeamMembers: %v", err)
+		}
+		if len(members) != 2 {
+			t.Fatalf("expected 2 members, got %d", len(members))
+		}
+
+		gotUser, err := s.GetUserByID(memberUser.ID)
+		if err != nil {
+			t.Fatalf("GetUserByID: %v", err)
+		}
+		if gotUser.Username != memberUser.Username {
+			t.Fatalf("unexpected user: %#v", gotUser)
+		}
+
+		if err := s.RemoveTeamMember(team.ID, memberUser.ID); err != nil {
+			t.Fatalf("RemoveTeamMember: %v", err)
+		}
+
+		isMember, err = s.IsTeamMember(team.ID, memberUser.ID)
+		if err != nil {
+			t.Fatalf("IsTeamMember after remove: %v", err)
+		}
+		if isMember {
+			t.Fatal("expected member removed from team")
+		}
+	})
+}
+
+func TestBoltStoreTransferTeamOwnership_UpdatesOwnerAndRoles(t *testing.T) {
+	withTempBoltStore(t, func(s *BoltStore) {
+		owner := model.NewUser("owner", "Owner", "hashed")
+		memberUser := model.NewUser("member", "Member", "hashed")
+		_ = s.CreateUser(owner)
+		_ = s.CreateUser(memberUser)
+		team := model.NewTeam("Team A", "", owner.ID)
+		_ = s.CreateTeam(team)
+		ownerMember := model.NewTeamMember(team.ID, owner.ID, "owner")
+		member := model.NewTeamMember(team.ID, memberUser.ID, "member")
+		_ = s.AddTeamMember(ownerMember)
+		_ = s.AddTeamMember(member)
+
+		if err := s.TransferTeamOwnership(team.ID, owner.ID, memberUser.ID); err != nil {
+			t.Fatalf("TransferTeamOwnership: %v", err)
+		}
+
+		updatedTeam, err := s.GetTeamByID(team.ID)
+		if err != nil {
+			t.Fatalf("GetTeamByID: %v", err)
+		}
+		if updatedTeam.OwnerID != memberUser.ID {
+			t.Fatalf("expected owner %s, got %s", memberUser.ID, updatedTeam.OwnerID)
+		}
+
+		members, err := s.GetTeamMembers(team.ID)
+		if err != nil {
+			t.Fatalf("GetTeamMembers: %v", err)
+		}
+		roleByUser := map[string]string{}
+		for _, m := range members {
+			roleByUser[m.UserID] = m.Role
+		}
+		if roleByUser[memberUser.ID] != "owner" {
+			t.Fatalf("expected new owner role 'owner', got %q", roleByUser[memberUser.ID])
+		}
+		if roleByUser[owner.ID] != "member" {
+			t.Fatalf("expected old owner role 'member', got %q", roleByUser[owner.ID])
+		}
+	})
+}
+
+func TestBoltStoreTransferTeamOwnership_RejectsNonMemberTarget(t *testing.T) {
+	withTempBoltStore(t, func(s *BoltStore) {
+		owner := model.NewUser("owner", "Owner", "hashed")
+		outsider := model.NewUser("outsider", "Outsider", "hashed")
+		_ = s.CreateUser(owner)
+		_ = s.CreateUser(outsider)
+		team := model.NewTeam("Team A", "", owner.ID)
+		_ = s.CreateTeam(team)
+		_ = s.AddTeamMember(model.NewTeamMember(team.ID, owner.ID, "owner"))
+
+		if err := s.TransferTeamOwnership(team.ID, owner.ID, outsider.ID); err == nil {
+			t.Fatal("expected transfer to non-member to fail")
+		}
+	})
+}

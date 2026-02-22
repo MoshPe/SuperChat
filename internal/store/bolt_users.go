@@ -41,11 +41,28 @@ func (s *BoltStore) GetUserByUsername(username string) (*model.User, error) {
 
 		userID := bucket.Get([]byte("username:" + username))
 		if userID == nil {
-			return fmt.Errorf("user not found")
+			return ErrUserNotFound
 		}
 		userData := bucket.Get(userID)
 		if userData == nil {
-			return fmt.Errorf("user not found")
+			return ErrUserNotFound
+		}
+		return json.Unmarshal(userData, user)
+	})
+	return user, err
+}
+
+func (s *BoltStore) GetUserByID(userID string) (*model.User, error) {
+	user := &model.User{}
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte("users"))
+		if bucket == nil {
+			return fmt.Errorf("users bucket not found")
+		}
+
+		userData := bucket.Get([]byte(userID))
+		if userData == nil {
+			return ErrUserNotFound
 		}
 		return json.Unmarshal(userData, user)
 	})

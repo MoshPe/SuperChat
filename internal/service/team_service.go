@@ -24,10 +24,8 @@ func newValidationError(message string) error {
 }
 
 type TeamServiceDeps struct {
-	Teams         store.TeamStore
-	IsTeamMember  func(teamID, userID string) bool
-	IsTeamOwner   func(teamID, userID string) bool
-	AddTeamMember func(*model.TeamMember) error
+	Teams store.TeamStore
+	Users store.UserStore
 }
 
 type TeamService struct {
@@ -38,6 +36,15 @@ type UpdateTeamInput struct {
 	Name        *string
 	Description *string
 	Avatar      *string
+}
+
+type TeamMemberView struct {
+	ID       string    `json:"id"`
+	TeamID   string    `json:"team_id"`
+	UserID   string    `json:"user_id"`
+	Username string    `json:"username"`
+	Role     string    `json:"role"`
+	JoinedAt time.Time `json:"joined_at"`
 }
 
 func NewTeamService(deps TeamServiceDeps) *TeamService {
@@ -56,14 +63,9 @@ func (s *TeamService) CreateTeam(userID string, req model.CreateTeamRequest) (*m
 	if err := s.deps.Teams.CreateTeam(team); err != nil {
 		return nil, err
 	}
-
-	if s.deps.AddTeamMember != nil {
-		member := model.NewTeamMember(team.ID, userID, "owner")
-		if err := s.deps.AddTeamMember(member); err != nil {
-			return nil, err
-		}
+	if err := s.deps.Teams.AddTeamMember(model.NewTeamMember(team.ID, userID, "owner")); err != nil {
+		return nil, err
 	}
-
 	return team, nil
 }
 
@@ -75,7 +77,11 @@ func (s *TeamService) ListTeams(userID string) ([]*model.Team, error) {
 }
 
 func (s *TeamService) GetTeam(teamID, userID string) (*model.Team, error) {
-	if s.deps.IsTeamMember != nil && !s.deps.IsTeamMember(teamID, userID) {
+	isMember, err := s.deps.Teams.IsTeamMember(teamID, userID)
+	if err != nil {
+		return nil, err
+	}
+	if !isMember {
 		return nil, ErrForbidden
 	}
 	team, err := s.deps.Teams.GetTeamByID(teamID)
@@ -86,16 +92,9 @@ func (s *TeamService) GetTeam(teamID, userID string) (*model.Team, error) {
 }
 
 func (s *TeamService) UpdateTeam(teamID, userID string, input UpdateTeamInput) (*model.Team, error) {
-	if s.deps.IsTeamOwner != nil && !s.deps.IsTeamOwner(teamID, userID) {
-		return nil, ErrForbidden
-	}
-
-	team, err := s.deps.Teams.GetTeamByID(teamID)
-	if errors.Is(err, store.ErrTeamNotFound) {
-		return nil, ErrNotFound
-	}
-	if err != nil {
-		return nil, err
+	team, ownerErr := s.getOwnedTeamOrForbidden(teamID, userID)
+	if ownerErr != nil {
+		return nil, ownerErr
 	}
 
 	if input.Name != nil {
@@ -120,8 +119,191 @@ func (s *TeamService) UpdateTeam(teamID, userID string, input UpdateTeamInput) (
 }
 
 func (s *TeamService) DeleteTeam(teamID, userID string) error {
-	if s.deps.IsTeamOwner != nil && !s.deps.IsTeamOwner(teamID, userID) {
-		return ErrForbidden
+	if _, err := s.getOwnedTeamOrForbidden(teamID, userID); err != nil {
+		return err
 	}
 	return s.deps.Teams.DeleteTeam(teamID)
+}
+
+func (s *TeamService) GetTeamMembers(teamID, requesterID string) ([]TeamMemberView, error) {
+	isMember, err := s.deps.Teams.IsTeamMember(teamID, requesterID)
+	if err != nil {
+		return nil, err
+	}
+	if !isMember {
+		return nil, ErrForbidden
+	}
+
+	members, err := s.deps.Teams.GetTeamMembers(teamID)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]TeamMemberView, 0, len(members))
+	for _, m := range members {
+		username := ""
+		if s.deps.Users != nil {
+			if u, err := s.deps.Users.GetUserByID(m.UserID); err == nil && u != nil {
+				username = u.Username
+			}
+		}
+		result = append(result, TeamMemberView{
+			ID:       m.ID,
+			TeamID:   m.TeamID,
+			UserID:   m.UserID,
+			Username: username,
+			Role:     m.Role,
+			JoinedAt: m.JoinedAt,
+		})
+	}
+	return result, nil
+}
+
+func (s *TeamService) AddTeamMember(teamID, requesterID, targetUsername string) (string, error) {
+	if _, err := s.getOwnedTeamOrForbidden(teamID, requesterID); err != nil {
+		return "", err
+	}
+
+	targetUsername = strings.TrimSpace(targetUsername)
+	if targetUsername == "" {
+		return "", newValidationError("Username is required")
+	}
+
+	target, err := s.deps.Users.GetUserByUsername(targetUsername)
+	if errors.Is(err, store.ErrUserNotFound) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+
+	alreadyMember, err := s.deps.Teams.IsTeamMember(teamID, target.ID)
+	if err != nil {
+		return "", err
+	}
+	if alreadyMember {
+		return "", newValidationError("User already a member")
+	}
+
+	member := model.NewTeamMember(teamID, target.ID, "member")
+	if err := s.deps.Teams.AddTeamMember(member); err != nil {
+		return "", err
+	}
+	return target.ID, nil
+}
+
+func (s *TeamService) RemoveTeamMember(teamID, requesterID, targetUserID string) error {
+	team, err := s.getOwnedTeamOrForbidden(teamID, requesterID)
+	if err != nil {
+		return err
+	}
+
+	if team.OwnerID == targetUserID {
+		return newValidationError("Cannot remove team owner")
+	}
+
+	isMember, err := s.deps.Teams.IsTeamMember(teamID, targetUserID)
+	if err != nil {
+		return err
+	}
+	if !isMember {
+		return ErrNotFound
+	}
+
+	return s.deps.Teams.RemoveTeamMember(teamID, targetUserID)
+}
+
+func (s *TeamService) JoinTeam(teamID, requesterID string) (*model.Team, error) {
+	team, err := s.deps.Teams.GetTeamByID(teamID)
+	if errors.Is(err, store.ErrTeamNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	alreadyMember, err := s.deps.Teams.IsTeamMember(teamID, requesterID)
+	if err != nil {
+		return nil, err
+	}
+	if alreadyMember {
+		return nil, newValidationError("Already a member of this team")
+	}
+
+	if err := s.deps.Teams.AddTeamMember(model.NewTeamMember(teamID, requesterID, "member")); err != nil {
+		return nil, err
+	}
+	return team, nil
+}
+
+func (s *TeamService) LeaveTeam(teamID, requesterID string) error {
+	team, err := s.deps.Teams.GetTeamByID(teamID)
+	if err == nil && team != nil && team.OwnerID == requesterID {
+		return newValidationError("Team owner cannot leave. Transfer ownership first.")
+	}
+	if err != nil && !errors.Is(err, store.ErrTeamNotFound) {
+		return err
+	}
+
+	isMember, err := s.deps.Teams.IsTeamMember(teamID, requesterID)
+	if err != nil {
+		return err
+	}
+	if !isMember {
+		return ErrForbidden
+	}
+
+	return s.deps.Teams.RemoveTeamMember(teamID, requesterID)
+}
+
+func (s *TeamService) TransferOwnership(teamID, requesterID, newOwnerID string) (*model.Team, error) {
+	team, err := s.deps.Teams.GetTeamByID(teamID)
+	if errors.Is(err, store.ErrTeamNotFound) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	if team.OwnerID != requesterID {
+		return nil, ErrForbidden
+	}
+
+	newOwnerID = strings.TrimSpace(newOwnerID)
+	if newOwnerID == "" {
+		return nil, newValidationError("Target user is required")
+	}
+	if newOwnerID == requesterID {
+		return nil, newValidationError("Cannot transfer ownership to yourself")
+	}
+
+	isMember, err := s.deps.Teams.IsTeamMember(teamID, newOwnerID)
+	if err != nil {
+		return nil, err
+	}
+	if !isMember {
+		return nil, newValidationError("New owner must be an existing team member")
+	}
+
+	if err := s.deps.Teams.TransferTeamOwnership(teamID, requesterID, newOwnerID); err != nil {
+		return nil, err
+	}
+
+	updated, err := s.deps.Teams.GetTeamByID(teamID)
+	if errors.Is(err, store.ErrTeamNotFound) {
+		return nil, ErrNotFound
+	}
+	return updated, err
+}
+
+func (s *TeamService) getOwnedTeamOrForbidden(teamID, userID string) (*model.Team, error) {
+	team, err := s.deps.Teams.GetTeamByID(teamID)
+	if errors.Is(err, store.ErrTeamNotFound) {
+		return nil, ErrForbidden
+	}
+	if err != nil {
+		return nil, err
+	}
+	if team.OwnerID != userID {
+		return nil, ErrForbidden
+	}
+	return team, nil
 }

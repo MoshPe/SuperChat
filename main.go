@@ -122,12 +122,12 @@ func main() {
 	api.HandleFunc("/teams/{id}", authMiddleware(apiServer.HandleGetTeam)).Methods("GET")
 	api.HandleFunc("/teams/{id}", authMiddleware(apiServer.HandleUpdateTeam)).Methods("PUT")
 	api.HandleFunc("/teams/{id}", authMiddleware(apiServer.HandleDeleteTeam)).Methods("DELETE")
-	api.HandleFunc("/teams/{id}/members", authMiddleware(handleGetTeamMembers)).Methods("GET")
-	api.HandleFunc("/teams/{id}/members", authMiddleware(handleAddTeamMember)).Methods("POST")
-	api.HandleFunc("/teams/{id}/members/{userId}", authMiddleware(handleRemoveTeamMember)).Methods("DELETE")
-	api.HandleFunc("/teams/{id}/transfer-ownership", authMiddleware(handleTransferOwnership)).Methods("POST")
-	api.HandleFunc("/teams/{id}/join", authMiddleware(handleJoinTeam)).Methods("POST")
-	api.HandleFunc("/teams/{id}/leave", authMiddleware(handleLeaveTeam)).Methods("POST")
+	api.HandleFunc("/teams/{id}/members", authMiddleware(apiServer.HandleGetTeamMembers)).Methods("GET")
+	api.HandleFunc("/teams/{id}/members", authMiddleware(apiServer.HandleAddTeamMember)).Methods("POST")
+	api.HandleFunc("/teams/{id}/members/{userId}", authMiddleware(apiServer.HandleRemoveTeamMember)).Methods("DELETE")
+	api.HandleFunc("/teams/{id}/transfer-ownership", authMiddleware(apiServer.HandleTransferOwnership)).Methods("POST")
+	api.HandleFunc("/teams/{id}/join", authMiddleware(apiServer.HandleJoinTeam)).Methods("POST")
+	api.HandleFunc("/teams/{id}/leave", authMiddleware(apiServer.HandleLeaveTeam)).Methods("POST")
 
 	// Chat routes
 	api.HandleFunc("/teams/{id}/messages", authMiddleware(handleGetMessages)).Methods("GET")
@@ -192,26 +192,31 @@ func main() {
 
 func newHTTPAPIDeps(boltStore *store.BoltStore) httpapi.HandlerDeps {
 	teamService := svc.NewTeamService(svc.TeamServiceDeps{
-		Teams:         boltStore,
-		IsTeamMember:  isTeamMember,
-		IsTeamOwner:   isTeamOwner,
-		AddTeamMember: addTeamMember,
+		Teams: boltStore,
+		Users: boltStore,
 	})
 
 	return httpapi.HandlerDeps{
 		AuthMiddleware: authMiddleware,
 
-		HandleRegister:   handleRegister,
-		HandleLogin:      handleLogin,
-		HandleLogout:     handleLogout,
-		HandleCreateTeam: handleCreateTeam,
-		HandleGetTeams:   handleGetTeams,
-		HandleGetTeam:    handleGetTeam,
-		HandleUpdateTeam: handleUpdateTeam,
-		HandleDeleteTeam: handleDeleteTeam,
-		HandleGetUpload:  handleGetUpload,
+		HandleRegister:          handleRegister,
+		HandleLogin:             handleLogin,
+		HandleLogout:            handleLogout,
+		HandleCreateTeam:        handleCreateTeam,
+		HandleGetTeams:          handleGetTeams,
+		HandleGetTeam:           handleGetTeam,
+		HandleUpdateTeam:        handleUpdateTeam,
+		HandleDeleteTeam:        handleDeleteTeam,
+		HandleGetTeamMembers:    handleGetTeamMembers,
+		HandleAddTeamMember:     handleAddTeamMember,
+		HandleRemoveTeamMember:  handleRemoveTeamMember,
+		HandleJoinTeam:          handleJoinTeam,
+		HandleLeaveTeam:         handleLeaveTeam,
+		HandleTransferOwnership: handleTransferOwnership,
+		HandleGetUpload:         handleGetUpload,
 
-		TeamCore: teamService,
+		TeamCore:         teamService,
+		KickUserFromTeam: kickUserFromTeam,
 
 		HashPassword:      hashPassword,
 		CheckPassword:     checkPassword,
