@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -407,8 +408,7 @@ func getTeamMessages(teamID string, limit int) ([]*Message, error) {
 		}
 
 		c := bucket.Cursor()
-		// Start from the end to get most recent messages
-		for k, v := c.Last(); k != nil && len(messages) < limit; k, v = c.Prev() {
+		for k, v := c.First(); k != nil; k, v = c.Next() {
 			var message Message
 			if err := json.Unmarshal(v, &message); err != nil {
 				continue
@@ -416,8 +416,16 @@ func getTeamMessages(teamID string, limit int) ([]*Message, error) {
 
 			// TTL filter: include only messages within the last 7 days
 			if message.TeamID == teamID && message.CreatedAt.After(time.Now().Add(-7*24*time.Hour)) {
-				messages = append([]*Message{&message}, messages...) // Prepend to maintain order
+				m := message
+				messages = append(messages, &m)
 			}
+		}
+
+		sort.Slice(messages, func(i, j int) bool {
+			return messages[i].CreatedAt.Before(messages[j].CreatedAt)
+		})
+		if len(messages) > limit {
+			messages = messages[len(messages)-limit:]
 		}
 
 		return nil

@@ -103,7 +103,7 @@ const Layout = () => {
         </div>
 
         {/* Page content */}
-        <main className="flex-1 min-h-0 overflow-hidden dark:bg-gray-900">
+        <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden dark:bg-gray-900">
           <Outlet />
         </main>
       </div>

@@ -22,6 +22,7 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
   const [onlineCounts, setOnlineCounts] = useState({})
   const firstLoadRef = useRef(true)
   const [avatarUrls, setAvatarUrls] = useState({})
+  const avatarUrlsRef = useRef({})
 
   const teamsEqual = (a = [], b = []) => {
     if (a.length !== b.length) return false
@@ -65,10 +66,14 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
 
   // Fetch and cache avatar blobs for teams (protected endpoints)
   useEffect(() => {
+    avatarUrlsRef.current = avatarUrls
+  }, [avatarUrls])
+
+  useEffect(() => {
     const loadAvatars = async () => {
       for (const t of teams) {
         if (!t.avatar) continue
-        if (avatarUrls[t.avatar]) continue
+        if (avatarUrlsRef.current[t.avatar]) continue
         let path = t.avatar
         if (path.startsWith('/api/')) {
           path = path.replace(/^\/api/, '')
@@ -83,10 +88,13 @@ const Sidebar = ({ isOpen, onClose, user, onLogout }) => {
       }
     }
     loadAvatars()
+  }, [teams])
+
+  useEffect(() => {
     return () => {
-      Object.values(avatarUrls).forEach(url => URL.revokeObjectURL(url))
+      Object.values(avatarUrlsRef.current).forEach(url => URL.revokeObjectURL(url))
     }
-  }, [teams, avatarUrls])
+  }, [])
 
   // Cleanup cached avatars that are no longer referenced
   useEffect(() => {

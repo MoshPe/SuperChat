@@ -13,18 +13,24 @@ const Login = () => {
   const [showPassword, setShowPassword] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+  const [invalidCredentials, setInvalidCredentials] = useState(false)
 
   const handleSubmit = async (e) => {
     e.preventDefault()
     setLoading(true)
     setError('')
+    setInvalidCredentials(false)
 
     const result = await login(formData.username, formData.password)
     
     if (result.success) {
       navigate('/dashboard')
     } else {
-      setError(result.error)
+      if (result.status === 401) {
+        setInvalidCredentials(true)
+      } else {
+        setError(result.error)
+      }
     }
     
     setLoading(false)
@@ -37,6 +43,7 @@ const Login = () => {
       [name]: value
     }))
     if (error) setError('')
+    if (invalidCredentials) setInvalidCredentials(false)
   }
 
   return (
@@ -110,6 +117,12 @@ const Login = () => {
                 </button>
               </div>
             </div>
+
+            {invalidCredentials && (
+              <p className="text-sm text-red-600 dark:text-red-400">
+                Username or password are incorrect.
+              </p>
+            )}
 
             <div>
               <button

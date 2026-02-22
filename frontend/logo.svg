@@ -1,11 +1,15 @@
 <svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <linearGradient id="grad" x1="8" y1="8" x2="56" y2="56" gradientUnits="userSpaceOnUse">
+    <linearGradient id="grad" x1="10" y1="10" x2="54" y2="54" gradientUnits="userSpaceOnUse">
       <stop stop-color="#2563EB"/>
-      <stop offset="1" stop-color="#4F46E5"/>
+      <stop offset="1" stop-color="#1D4ED8"/>
     </linearGradient>
   </defs>
-  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#grad)"/>
-  <path d="M18 22C18 19.7909 19.7909 18 22 18H42C44.2091 18 46 19.7909 46 22V27C46 29.2091 44.2091 31 42 31H30L24 37V31H22C19.7909 31 18 29.2091 18 27V22Z" fill="white"/>
-  <path d="M22 35H34C36.2091 35 38 36.7909 38 39V42C38 44.2091 36.2091 46 34 46H26L20 52V46H22C24.2091 46 26 44.2091 26 42V39C26 36.7909 24.2091 35 22 35Z" fill="white" opacity="0.9"/>
+  <rect x="6" y="6" width="52" height="52" rx="14" fill="url(#grad)"/>
+  <g transform="translate(11 11) scale(2)">
+    <path
+      d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z"
+      fill="white"
+    />
+  </g>
 </svg>

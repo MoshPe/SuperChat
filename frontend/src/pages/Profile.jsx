@@ -166,7 +166,7 @@ const Profile = () => {
               value={isEditing ? formData.name : user.name}
               onChange={handleChange}
               disabled={!isEditing}
-              className="input disabled:bg-gray-50 disabled:text-gray-500"
+              className="input disabled:bg-gray-50 disabled:text-gray-500 dark:disabled:bg-gray-800 dark:disabled:text-gray-400"
               placeholder="Enter your name"
             />
           </div>
@@ -182,24 +182,24 @@ const Profile = () => {
               type="text"
               value={user.username}
               disabled
-              className="input disabled:bg-gray-50 disabled:text-gray-500"
+              className="input disabled:bg-gray-50 disabled:text-gray-500 dark:disabled:bg-gray-800 dark:disabled:text-gray-400"
               placeholder="Enter username"
             />
           </div>
 
           {/* Account info */}
-          <div className="bg-gray-50 rounded-lg p-4 space-y-3">
-            <h3 className="font-medium text-gray-900">Account Information</h3>
+          <div className="bg-gray-50 dark:bg-gray-700/60 rounded-lg p-4 space-y-3 border border-gray-200 dark:border-gray-600">
+            <h3 className="font-medium text-gray-900 dark:text-gray-100">Account Information</h3>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <span className="text-gray-500">Member since:</span>
-                <p className="font-medium text-gray-900">
+                <span className="text-gray-500 dark:text-gray-300">Member since:</span>
+                <p className="font-medium text-gray-900 dark:text-gray-100">
                   {new Date(user.created_at).toLocaleDateString()}
                 </p>
               </div>
               <div>
-                <span className="text-gray-500">Last updated:</span>
-                <p className="font-medium text-gray-900">
+                <span className="text-gray-500 dark:text-gray-300">Last updated:</span>
+                <p className="font-medium text-gray-900 dark:text-gray-100">
                   {new Date(user.updated_at).toLocaleDateString()}
                 </p>
               </div>
@@ -325,13 +325,13 @@ const Profile = () => {
       </div>
 
       {/* Danger zone */}
-      <div className="card p-6 border-red-200 bg-red-50">
-        <h3 className="text-lg font-medium text-red-900 mb-4">Danger Zone</h3>
+      <div className="card p-6 border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/30">
+        <h3 className="text-lg font-medium text-red-900 dark:text-red-100 mb-4">Danger Zone</h3>
         <div className="space-y-3">
-          <div className="flex items-center justify-between p-3 bg-red-100 rounded-lg">
+          <div className="flex items-center justify-between p-3 bg-red-100 dark:bg-red-900/50 rounded-lg">
             <div>
-              <p className="font-medium text-red-900">Delete Account</p>
-              <p className="text-sm text-red-700">
+              <p className="font-medium text-red-900 dark:text-red-100">Delete Account</p>
+              <p className="text-sm text-red-700 dark:text-red-200">
                 Permanently delete your account and all associated data
               </p>
             </div>
@@ -344,7 +344,7 @@ const Profile = () => {
             </button>
           </div>
         </div>
-        <p className="text-xs text-red-600 mt-3">
+        <p className="text-xs text-red-600 dark:text-red-200 mt-3">
           Account deletion is not available in this version
         </p>
       </div>

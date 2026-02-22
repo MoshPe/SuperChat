@@ -21,7 +21,7 @@ var webFiles embed.FS
 var (
 	upgrader = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
-			return true // In production, implement proper origin checking
+			return isAllowedWebSocketOrigin(r)
 		},
 	}
 	db *bbolt.DB
@@ -46,6 +46,17 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 func main() {
+	host := flag.String("host", "", "Hostname or IP to bind the server (optional, defaults to local LAN IP)")
+	port := flag.Int("port", 8443, "Port to run the server on")
+	allowedOrigins := flag.String("allowed-origins", "", "Comma-separated list of allowed WebSocket Origin values")
+	ttlMinutes := flag.Int("ttl-minutes", 7*24*60, "Retention TTL for messages/uploads in minutes")
+	flag.Parse()
+	setAllowedWebSocketOriginsFromCSV(*allowedOrigins)
+	if *ttlMinutes <= 0 {
+		log.Fatal("ttl-minutes must be > 0")
+	}
+	retentionTTL := time.Duration(*ttlMinutes) * time.Minute
+
 	// Initialize database
 	var err error
 	db, err = bbolt.Open("superchat.db", 0600, &bbolt.Options{Timeout: 1 * time.Second})
@@ -69,15 +80,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Start TTL janitors (7 days TTL, run hourly)
-	startMessageTTLJanitor(7*24*time.Hour, 1*time.Hour)
-	startUploadTTLJanitor(7*24*time.Hour, 1*time.Hour)
+	// Start TTL janitors (configurable retention TTL, run hourly)
+	startMessageTTLJanitor(retentionTTL, 1*time.Minute)
+	startUploadTTLJanitor(retentionTTL, 1*time.Minute)
 
 	// Create router
 	r := mux.NewRouter()
 
 	// Apply CORS middleware to all routes
-	// TODO remove cors
 	r.Use(corsMiddleware)
 
 	// API routes
@@ -160,10 +170,6 @@ func main() {
 		r2.URL.Path = "/index.html"
 		fsHandler.ServeHTTP(w, r2)
 	}))
-
-	host := flag.String("host", "", "Hostname or IP to bind the server (optional, defaults to local LAN IP)")
-	port := flag.Int("port", 8443, "Port to run the server on")
-	flag.Parse()
 
 	bindHost := *host
 	addr := fmt.Sprintf("%s:%d", bindHost, *port)

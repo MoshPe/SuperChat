@@ -19,6 +19,7 @@ const TeamSettingsModal = ({
   const [uploading, setUploading] = useState(false)
   const [previewUrl, setPreviewUrl] = useState('')
   const fileInputRef = useRef(null)
+  const previewObjectUrlRef = useRef('')
 
   useEffect(() => {
     if (isOpen && team) {
@@ -30,14 +31,22 @@ const TeamSettingsModal = ({
 
   // Build a preview URL for secured uploads
   useEffect(() => {
-    let revoked = false
+    let cancelled = false
     const load = async () => {
       if (!avatar) {
+        if (previewObjectUrlRef.current) {
+          URL.revokeObjectURL(previewObjectUrlRef.current)
+          previewObjectUrlRef.current = ''
+        }
         setPreviewUrl('')
         return
       }
       // If absolute URL, just use it
       if (/^https?:\/\//i.test(avatar)) {
+        if (previewObjectUrlRef.current) {
+          URL.revokeObjectURL(previewObjectUrlRef.current)
+          previewObjectUrlRef.current = ''
+        }
         setPreviewUrl(avatar)
         return
       }
@@ -48,7 +57,15 @@ const TeamSettingsModal = ({
         }
         const res = await api.get(path, { responseType: 'blob' })
         const url = URL.createObjectURL(res.data)
-        if (!revoked) setPreviewUrl(url)
+        if (cancelled) {
+          URL.revokeObjectURL(url)
+          return
+        }
+        if (previewObjectUrlRef.current) {
+          URL.revokeObjectURL(previewObjectUrlRef.current)
+        }
+        previewObjectUrlRef.current = url
+        setPreviewUrl(url)
       } catch (e) {
         console.error('Failed to load avatar preview', e)
         setPreviewUrl('')
@@ -56,12 +73,18 @@ const TeamSettingsModal = ({
     }
     load()
     return () => {
-      revoked = true
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl)
-      }
+      cancelled = true
     }
   }, [avatar])
+
+  useEffect(() => {
+    return () => {
+      if (previewObjectUrlRef.current) {
+        URL.revokeObjectURL(previewObjectUrlRef.current)
+        previewObjectUrlRef.current = ''
+      }
+    }
+  }, [])
 
   if (!isOpen) return null
 

@@ -15,7 +15,7 @@ const ManageMembersModal = ({ isOpen, onClose, teamId, ownerId }) => {
     setLoading(true)
     try {
       const [usersRes, membersRes] = await Promise.all([
-        api.get('/users'),
+        api.get(`/users?team_id=${encodeURIComponent(teamId)}`),
         api.get(`/teams/${teamId}/members`),
       ])
       setUsers(usersRes.data.data || [])
@@ -146,4 +146,3 @@ const ManageMembersModal = ({ isOpen, onClose, teamId, ownerId }) => {
 }
 
 export default ManageMembersModal
-

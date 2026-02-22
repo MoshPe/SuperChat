@@ -29,7 +29,8 @@ export const AuthProvider = ({ children }) => {
       return { success: true, user }
     } catch (error) {
       const message = error.response?.data?.error || 'Login failed'
-      return { success: false, error: message }
+      const status = error.response?.status
+      return { success: false, error: message, status }
     }
   }
 

@@ -209,7 +209,7 @@ const Chat = () => {
       try { wsRef.current.close() } catch {}
     }
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const wsUrl = `${protocol}://${window.location.hostname}:${window.location.port}/api/ws/${teamId}?token=${encodeURIComponent(token)}`
+    const wsUrl = `${protocol}://${window.location.host}/api/ws/${teamId}?token=${encodeURIComponent(token)}`
     const websocket = new WebSocket(wsUrl)
     
     websocket.onopen = () => {
@@ -773,5 +773,4 @@ const Chat = () => {
 }
 
 export default Chat
-
 

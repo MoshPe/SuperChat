@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react' 
+import React, { useState, useEffect, useRef } from 'react' 
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { 
@@ -20,6 +20,7 @@ const Dashboard = () => {
   const [loading, setLoading] = useState(true)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [avatarUrls, setAvatarUrls] = useState({})
+  const avatarUrlsRef = useRef({})
   const [onlineCounts, setOnlineCounts] = useState({})
   const [stats, setStats] = useState({
     totalTeams: 0,
@@ -85,10 +86,14 @@ const Dashboard = () => {
 
   // Load team avatars for cards (protected)
   useEffect(() => {
+    avatarUrlsRef.current = avatarUrls
+  }, [avatarUrls])
+
+  useEffect(() => {
     const loadAvatars = async () => {
       for (const t of teams) {
         if (!t.avatar) continue
-        if (avatarUrls[t.avatar]) continue
+        if (avatarUrlsRef.current[t.avatar]) continue
         let path = t.avatar
         if (path.startsWith('/api/')) {
           path = path.replace(/^\/api/, '')
@@ -103,10 +108,13 @@ const Dashboard = () => {
       }
     }
     loadAvatars()
+  }, [teams])
+
+  useEffect(() => {
     return () => {
-      Object.values(avatarUrls).forEach(url => URL.revokeObjectURL(url))
+      Object.values(avatarUrlsRef.current).forEach(url => URL.revokeObjectURL(url))
     }
-  }, [teams, avatarUrls])
+  }, [])
 
   // Cleanup cached avatars no longer referenced
   useEffect(() => {

@@ -398,6 +398,17 @@ func handleDeleteTeam(w http.ResponseWriter, r *http.Request) {
 
 // List all users (id, username) - for owner to pick members
 func handleListUsers(w http.ResponseWriter, r *http.Request) {
+	userID, _ := getUserFromContext(r)
+	teamID := strings.TrimSpace(r.URL.Query().Get("team_id"))
+	if teamID == "" {
+		writeErrorResponse(w, http.StatusBadRequest, "team_id is required")
+		return
+	}
+	if !isTeamOwner(teamID, userID) {
+		writeErrorResponse(w, http.StatusForbidden, "Only team owner can list users")
+		return
+	}
+
 	users, err := getAllUsers()
 	if err != nil {
 		writeErrorResponse(w, http.StatusInternalServerError, "Failed to get users")

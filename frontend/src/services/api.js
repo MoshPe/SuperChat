@@ -13,10 +13,18 @@ const api = axios.create({
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      // Token expired or invalid; redirect to login for fresh auth
+    const status = error.response?.status
+    const requestUrl = error.config?.url || ''
+    const currentPath = window.location.pathname
+    const isAuthEndpoint =
+      requestUrl.includes('/auth/login') || requestUrl.includes('/auth/register')
+    const isOnAuthPage = currentPath.startsWith('/login') || currentPath.startsWith('/register')
+
+    if (status === 401 && !isAuthEndpoint && !isOnAuthPage) {
+      // Token expired or invalid during an authenticated request; force re-auth
       window.location.href = '/login'
     }
+
     return Promise.reject(error)
   }
 )

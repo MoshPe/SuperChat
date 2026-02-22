@@ -12,7 +12,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-var jwtSecret = []byte("your-secret-key-change-in-production")
+// Hardcoded signing secret per project requirement (not env/flag driven).
+var jwtSecret = []byte("f6f8a9e06f3f6a4f0f95ce9a7d2f3d58b7f0a6c98f9469d0f64bb6f0a3f08b22")
 
 // Claims represents JWT claims
 type Claims struct {
