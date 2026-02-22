@@ -1,8 +1,8 @@
 package main
 
 import (
+	"SuperChat/internal/httpapi"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -126,26 +126,15 @@ func getNameFromContext(r *http.Request) string {
 
 // writeJSONResponse writes a JSON response with proper headers
 func writeJSONResponse(w http.ResponseWriter, statusCode int, data interface{}) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(data)
+	httpapi.WriteJSON(w, statusCode, data)
 }
 
 // writeErrorResponse writes an error response
 func writeErrorResponse(w http.ResponseWriter, statusCode int, message string) {
-	response := APIResponse{
-		Success: false,
-		Error:   message,
-	}
-	writeJSONResponse(w, statusCode, response)
+	httpapi.WriteError(w, statusCode, message)
 }
 
 // writeSuccessResponse writes a success response
 func writeSuccessResponse(w http.ResponseWriter, data interface{}, message string) {
-	response := APIResponse{
-		Success: true,
-		Message: message,
-		Data:    data,
-	}
-	writeJSONResponse(w, http.StatusOK, response)
+	httpapi.WriteSuccess(w, data, message)
 }

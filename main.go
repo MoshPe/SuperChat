@@ -1,7 +1,9 @@
 package main
 
 import (
+	"SuperChat/internal/store"
 	"embed"
+	"errors"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"SuperChat/internal/httpapi"
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
 	"go.etcd.io/bbolt"
@@ -46,6 +49,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 }
 
 func main() {
+	// Compile-time wiring hook for the layered backend refactor (phase 1).
 	host := flag.String("host", "", "Hostname or IP to bind the server (optional, defaults to local LAN IP)")
 	port := flag.Int("port", 8443, "Port to run the server on")
 	allowedOrigins := flag.String("allowed-origins", "", "Comma-separated list of allowed WebSocket Origin values")
@@ -64,6 +68,13 @@ func main() {
 		log.Fatal(err)
 	}
 	defer db.Close()
+	boltStore := store.NewBoltStore(db)
+
+	// Compile-time/runtime wiring hook for the layered backend refactor (phase 1).
+	// The returned router is not used yet; main still serves the existing router.
+	deps := newHTTPAPIDeps(boltStore)
+	_ = httpapi.NewRouter(deps)
+	apiServer := httpapi.NewServer(deps)
 
 	// Initialize database buckets
 	err = db.Update(func(tx *bbolt.Tx) error {
@@ -94,9 +105,9 @@ func main() {
 	api := r.PathPrefix("/api").Subrouter()
 
 	// Auth routes
-	api.HandleFunc("/auth/register", handleRegister).Methods("POST")
-	api.HandleFunc("/auth/login", handleLogin).Methods("POST")
-	api.HandleFunc("/auth/logout", authMiddleware(handleLogout)).Methods("POST")
+	api.HandleFunc("/auth/register", apiServer.HandleRegister).Methods("POST")
+	api.HandleFunc("/auth/login", apiServer.HandleLogin).Methods("POST")
+	api.HandleFunc("/auth/logout", authMiddleware(apiServer.HandleLogout)).Methods("POST")
 
 	// User routes
 	api.HandleFunc("/user/profile", authMiddleware(handleGetProfile)).Methods("GET")
@@ -175,4 +186,25 @@ func main() {
 	addr := fmt.Sprintf("%s:%d", bindHost, *port)
 	fmt.Printf("Server starting on http://%s:%d/\n", bindHost, *port)
 	log.Fatal(http.ListenAndServe(addr, r))
+}
+
+func newHTTPAPIDeps(userStore store.UserStore) httpapi.HandlerDeps {
+	return httpapi.HandlerDeps{
+		AuthMiddleware: authMiddleware,
+
+		HandleRegister:  handleRegister,
+		HandleLogin:     handleLogin,
+		HandleLogout:    handleLogout,
+		HandleGetTeams:  handleGetTeams,
+		HandleGetUpload: handleGetUpload,
+
+		HashPassword:      hashPassword,
+		CheckPassword:     checkPassword,
+		CreateUser:        userStore.CreateUser,
+		GetUserByUsername: userStore.GetUserByUsername,
+		GenerateToken:     generateToken,
+		IsUsernameExists: func(err error) bool {
+			return errors.Is(err, store.ErrUsernameExists) || errors.Is(err, errUsernameExists)
+		},
+	}
 }
