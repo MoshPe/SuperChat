@@ -293,14 +293,16 @@ func TestTeamServiceGetTeamMembers_EnrichesUsernames(t *testing.T) {
 			isTeamMemberFn:   func(teamID, userID string) (bool, error) { return true, nil },
 			getTeamMembersFn: func(teamID string) ([]*model.TeamMember, error) { return members, nil },
 		},
-		Users: &fakeUserStore{getUserByIDFn: func(id string) (*model.User, error) { return &model.User{ID: id, Username: "bob"}, nil }},
+		Users: &fakeUserStore{getUserByIDFn: func(id string) (*model.User, error) {
+			return &model.User{ID: id, Username: "bob", Name: "Bob Display"}, nil
+		}},
 	})
 
 	got, err := svc.GetTeamMembers("t1", "u1")
 	if err != nil {
 		t.Fatalf("GetTeamMembers: %v", err)
 	}
-	if len(got) != 1 || got[0].Username != "bob" || got[0].UserID != "u2" {
+	if len(got) != 1 || got[0].Username != "bob" || got[0].Name != "Bob Display" || got[0].UserID != "u2" {
 		t.Fatalf("unexpected members result: %#v", got)
 	}
 }

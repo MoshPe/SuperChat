@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
-import { User, Save, X, Lock, Shield } from 'lucide-react'
+import { User, Save, X, Lock, Shield, Eye, EyeOff } from 'lucide-react'
 
 const Profile = () => {
   const { user, updateProfile, changePassword } = useAuth()
@@ -13,11 +13,17 @@ const Profile = () => {
   const [pwdLoading, setPwdLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [passwordError, setPasswordError] = useState('')
   const [passwordSuccess, setPasswordSuccess] = useState('')
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
     newPassword: '',
     confirmPassword: '',
+  })
+  const [showPasswords, setShowPasswords] = useState({
+    currentPassword: false,
+    newPassword: false,
+    confirmPassword: false,
   })
 
   const handleSubmit = async (e) => {
@@ -73,20 +79,19 @@ const Profile = () => {
 
   const handlePasswordChange = async (e) => {
     e.preventDefault()
-    setError('')
-    setSuccess('')
+    setPasswordError('')
     setPasswordSuccess('')
 
     if (!passwordData.currentPassword || !passwordData.newPassword || !passwordData.confirmPassword) {
-      setError('All password fields are required')
+      setPasswordError('All password fields are required')
       return
     }
     if (passwordData.newPassword.length < 6) {
-      setError('New password must be at least 6 characters')
+      setPasswordError('New password must be at least 6 characters')
       return
     }
     if (passwordData.newPassword !== passwordData.confirmPassword) {
-      setError('Passwords do not match')
+      setPasswordError('Passwords do not match')
       return
     }
 
@@ -97,10 +102,10 @@ const Profile = () => {
         setPasswordSuccess('Password updated successfully!')
         setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' })
       } else {
-        setError(result.error)
+        setPasswordError(result.error)
       }
     } catch (err) {
-      setError('Failed to change password. Please try again.')
+      setPasswordError('Failed to change password. Please try again.')
     } finally {
       setPwdLoading(false)
     }
@@ -109,8 +114,12 @@ const Profile = () => {
   const handlePasswordInputChange = (e) => {
     const { name, value } = e.target
     setPasswordData((prev) => ({ ...prev, [name]: value }))
-    if (error) setError('')
+    if (passwordError) setPasswordError('')
     if (passwordSuccess) setPasswordSuccess('')
+  }
+
+  const togglePasswordVisibility = (field) => {
+    setShowPasswords((prev) => ({ ...prev, [field]: !prev[field] }))
   }
 
   // Sync local form state when user changes
@@ -157,7 +166,7 @@ const Profile = () => {
           {/* Name field (editable) */}
           <div>
             <label htmlFor="name" className="block text-sm font-medium text-gray-700 mb-2">
-              Name
+              Display Name
             </label>
             <input
               id="name"
@@ -250,49 +259,87 @@ const Profile = () => {
       <div className="card p-6">
         <h3 className="text-lg font-medium text-gray-900 mb-4">Security</h3>
         <form className="space-y-4" onSubmit={handlePasswordChange}>
+          {passwordError && (
+            <div className="bg-red-50 border border-red-200 text-red-700 dark:bg-red-900/30 dark:border-red-700 dark:text-red-200 px-4 py-3 rounded-lg text-sm">
+              {passwordError}
+            </div>
+          )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
               <label htmlFor="currentPassword" className="block text-sm font-medium text-gray-700 mb-2">
                 Current password
               </label>
-              <input
-                id="currentPassword"
-                name="currentPassword"
-                type="password"
-                value={passwordData.currentPassword}
-                onChange={handlePasswordInputChange}
-                className="input"
-                placeholder="Enter current password"
-              />
+              <div className="relative">
+                <input
+                  id="currentPassword"
+                  name="currentPassword"
+                  type={showPasswords.currentPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={passwordData.currentPassword}
+                  onChange={handlePasswordInputChange}
+                  className="input pr-10"
+                  placeholder="Enter current password"
+                />
+                <button
+                  type="button"
+                  onClick={() => togglePasswordVisibility('currentPassword')}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 dark:text-gray-300 dark:hover:text-gray-100"
+                  aria-label={showPasswords.currentPassword ? 'Hide current password' : 'Show current password'}
+                >
+                  {showPasswords.currentPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                </button>
+              </div>
             </div>
             <div>
               <label htmlFor="newPassword" className="block text-sm font-medium text-gray-700 mb-2">
                 New password
               </label>
-              <input
-                id="newPassword"
-                name="newPassword"
-                type="password"
-                value={passwordData.newPassword}
-                onChange={handlePasswordInputChange}
-                className="input"
-                placeholder="Enter new password"
-              />
+              <div className="relative">
+                <input
+                  id="newPassword"
+                  name="newPassword"
+                  type={showPasswords.newPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  value={passwordData.newPassword}
+                  onChange={handlePasswordInputChange}
+                  className="input pr-10"
+                  placeholder="Enter new password"
+                />
+                <button
+                  type="button"
+                  onClick={() => togglePasswordVisibility('newPassword')}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 dark:text-gray-300 dark:hover:text-gray-100"
+                  aria-label={showPasswords.newPassword ? 'Hide new password' : 'Show new password'}
+                >
+                  {showPasswords.newPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                </button>
+              </div>
               <p className="text-xs text-gray-500 mt-1">Minimum 6 characters</p>
             </div>
             <div>
               <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-2">
                 Confirm new password
               </label>
-              <input
-                id="confirmPassword"
-                name="confirmPassword"
-                type="password"
-                value={passwordData.confirmPassword}
-                onChange={handlePasswordInputChange}
-                className="input"
-                placeholder="Re-enter new password"
-              />
+              <div className="relative">
+                <input
+                  id="confirmPassword"
+                  name="confirmPassword"
+                  type={showPasswords.confirmPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  value={passwordData.confirmPassword}
+                  onChange={handlePasswordInputChange}
+                  className="input pr-10"
+                  placeholder="Re-enter new password"
+                />
+                <button
+                  type="button"
+                  onClick={() => togglePasswordVisibility('confirmPassword')}
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-gray-400 hover:text-gray-600 dark:text-gray-300 dark:hover:text-gray-100"
+                  aria-label={showPasswords.confirmPassword ? 'Hide confirm password' : 'Show confirm password'}
+                >
+                  {showPasswords.confirmPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                </button>
+              </div>
             </div>
           </div>
           <div className="flex items-center justify-between">
@@ -314,7 +361,7 @@ const Profile = () => {
             </button>
           </div>
           {passwordSuccess && (
-            <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg text-sm">
+            <div className="bg-green-50 border border-green-200 text-green-700 dark:bg-green-900/30 dark:border-green-700 dark:text-green-200 px-4 py-3 rounded-lg text-sm">
               {passwordSuccess}
             </div>
           )}

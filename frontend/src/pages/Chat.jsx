@@ -16,7 +16,8 @@ import {
   FileCode,
   FileSpreadsheet,
   FileAudio,
-  FileVideo
+  FileVideo,
+  Shield
 } from 'lucide-react'
 import api from '../services/api'
 import ManageMembersModal from '../components/ManageMembersModal'
@@ -32,8 +33,8 @@ const Chat = () => {
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [pendingAttachment, setPendingAttachment] = useState(null)
-  const [pendingPreview, setPendingPreview] = useState(null)
+  const [pendingAttachments, setPendingAttachments] = useState([])
+  const pendingAttachmentsRef = useRef([])
   const [imageUrls, setImageUrls] = useState({})
   const imageUrlsRef = useRef({})
   const [attachmentMeta, setAttachmentMeta] = useState({})
@@ -56,7 +57,6 @@ const Chat = () => {
   const teamAvatarObjRef = useRef(null)
   const [uploadError, setUploadError] = useState('')
   const [isDragOver, setIsDragOver] = useState(false)
-  const [uploadProgress, setUploadProgress] = useState(null)
 
   const checkMembership = async () => {
     try {
@@ -98,25 +98,31 @@ const Chat = () => {
     scrollToBottom()
   }, [messages])
 
-  // Cleanup pending preview URL on unmount
+  useEffect(() => {
+    pendingAttachmentsRef.current = pendingAttachments
+  }, [pendingAttachments])
+
+  // Cleanup pending preview URLs on unmount
   useEffect(() => {
     return () => {
-      if (pendingPreview) URL.revokeObjectURL(pendingPreview)
+      pendingAttachmentsRef.current.forEach(item => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+      })
     }
-  }, [pendingPreview])
+  }, [])
 
   // Fetch protected image blobs with auth header and cache object URLs
   useEffect(() => {
     const parseFilename = (headers) => {
-      const fromHeader = headers?.['x-upload-filename']
-      if (fromHeader) return fromHeader
       const cd = headers?.['content-disposition'] || ''
       const utf8Match = cd.match(/filename\*=UTF-8''([^;]+)/i)
       if (utf8Match?.[1]) {
         try { return decodeURIComponent(utf8Match[1]) } catch {}
       }
       const plainMatch = cd.match(/filename=\"?([^\";]+)\"?/i)
-      return plainMatch?.[1] || ''
+      if (plainMatch?.[1]) return plainMatch[1]
+      const fromHeader = headers?.['x-upload-filename']
+      return fromHeader || ''
     }
 
     const loadImages = async () => {
@@ -210,21 +216,48 @@ const Chat = () => {
     return `${(n / (1024 * 1024)).toFixed(1)} MB`
   }
 
-  const setPendingFile = (file) => {
+  const buildPendingAttachment = (file) => ({
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    file,
+    previewUrl: isImageFile(file) ? URL.createObjectURL(file) : '',
+    progress: null,
+    error: '',
+  })
+
+  const appendPendingFiles = (filesLike) => {
+    const files = Array.from(filesLike || []).filter(Boolean)
+    if (!files.length) return
     setUploadError('')
-    setUploadProgress(null)
-    if (pendingPreview) URL.revokeObjectURL(pendingPreview)
-    if (!file) {
-      setPendingAttachment(null)
-      setPendingPreview(null)
-      return
-    }
-    setPendingAttachment(file)
-    if (isImageFile(file)) {
-      setPendingPreview(URL.createObjectURL(file))
-    } else {
-      setPendingPreview(null)
-    }
+    setPendingAttachments(prev => [...prev, ...files.map(buildPendingAttachment)])
+  }
+
+  const removePendingAttachment = (attachmentId, { revokePreview = true } = {}) => {
+    setPendingAttachments(prev => {
+      const next = []
+      for (const item of prev) {
+        if (item.id !== attachmentId) {
+          next.push(item)
+          continue
+        }
+        if (revokePreview && item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+      }
+      return next
+    })
+  }
+
+  const clearPendingAttachments = () => {
+    setPendingAttachments(prev => {
+      prev.forEach(item => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+      })
+      return []
+    })
+  }
+
+  const updatePendingAttachment = (attachmentId, patch) => {
+    setPendingAttachments(prev => prev.map(item => (
+      item.id === attachmentId ? { ...item, ...patch } : item
+    )))
   }
 
   // Load team avatar (protected endpoint) to use as img src
@@ -420,7 +453,7 @@ const Chat = () => {
               return ns
             })
             typingTimeoutsRef.current.delete(name)
-          }, 3000)
+          }, 500)
           typingTimeoutsRef.current.set(name, timer)
         }
         break
@@ -446,20 +479,18 @@ const Chat = () => {
 
   const sendMessage = async () => {
     if (sending) return
-    if (!pendingAttachment && !newMessage.trim()) return
+    if (!pendingAttachments.length && !newMessage.trim()) return
 
     setSending(true)
     setUploadError('')
 
     try {
-      // Send pending attachment first (if any)
-      if (pendingAttachment) {
-        await uploadAttachmentAndSend(pendingAttachment)
-        setPendingAttachment(null)
-        if (pendingPreview) {
-          URL.revokeObjectURL(pendingPreview)
-          setPendingPreview(null)
-        }
+      const attachmentsToSend = [...pendingAttachments]
+
+      // Send pending attachments first (if any)
+      for (const attachment of attachmentsToSend) {
+        await uploadAttachmentAndSend(attachment)
+        removePendingAttachment(attachment.id, { revokePreview: false })
       }
 
       // Send text message if provided
@@ -490,10 +521,11 @@ const Chat = () => {
     }
   }
 
-  const uploadAttachmentAndSend = async (file) => {
+  const uploadAttachmentAndSend = async (attachment) => {
+    const file = attachment.file
     try {
       setUploading(true)
-      setUploadProgress(0)
+      updatePendingAttachment(attachment.id, { progress: 0, error: '' })
       const form = new FormData()
       form.append('file', file)
       const res = await api.post(`/upload?team_id=${teamId}`, form, {
@@ -502,16 +534,16 @@ const Chat = () => {
           if (!event) return
           if (!event.total || event.total <= 0) return
           const next = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)))
-          setUploadProgress(next)
+          updatePendingAttachment(attachment.id, { progress: next })
         },
       })
       const url = res.data.data?.url
       if (!url) return
       const msgType = isImageFile(file) ? 'image' : 'file'
       // Seed local cache with preview for images and metadata for all attachments
-      if (msgType === 'image' && pendingPreview) {
-        imageUrlsRef.current[url] = pendingPreview
-        setImageUrls(prev => ({ ...prev, [url]: pendingPreview }))
+      if (msgType === 'image' && attachment.previewUrl) {
+        imageUrlsRef.current[url] = attachment.previewUrl
+        setImageUrls(prev => ({ ...prev, [url]: attachment.previewUrl }))
       }
       const meta = { filename: file.name || '', contentType: file.type || '', size: file.size || 0 }
       attachmentMetaRef.current[url] = meta
@@ -531,11 +563,11 @@ const Chat = () => {
     } catch (e) {
       console.error('Upload failed', e)
       const msg = e.response?.data?.error || e.response?.data?.message || 'Upload failed'
+      updatePendingAttachment(attachment.id, { error: msg, progress: null })
       setUploadError(msg)
       throw e
     } finally {
       setUploading(false)
-      setUploadProgress(null)
     }
   }
 
@@ -548,7 +580,7 @@ const Chat = () => {
         const file = it.getAsFile()
         if (file) {
           e.preventDefault()
-          setPendingFile(file)
+          appendPendingFiles([file])
           break
         }
       }
@@ -556,9 +588,9 @@ const Chat = () => {
   }
 
   const handleFileInputChange = (e) => {
-    const file = e.target.files?.[0]
-    if (!file) return
-    setPendingFile(file)
+    const files = e.target.files
+    if (!files?.length) return
+    appendPendingFiles(files)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
@@ -577,7 +609,7 @@ const Chat = () => {
     if (!e.dataTransfer?.files?.length) return
     e.preventDefault()
     setIsDragOver(false)
-    setPendingFile(e.dataTransfer.files[0])
+    appendPendingFiles(e.dataTransfer.files)
   }
 
   const deleteMessage = async (messageId) => {
@@ -710,7 +742,15 @@ const Chat = () => {
               )}
             </div>
             <div>
-              <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{team.name}</h1>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{team.name}</h1>
+                {user?.id === team.owner_id && (
+                  <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 dark:bg-amber-900/40 dark:text-amber-200">
+                    <Shield className="mr-1 h-3 w-3" />
+                    Owner
+                  </span>
+                )}
+              </div>
               {team.description && (
                 <p className="text-sm text-gray-500 dark:text-gray-300">{team.description}</p>
               )}
@@ -826,9 +866,9 @@ const Chat = () => {
                             <Icon className="w-4 h-4" />
                           </div>
                           <div className="min-w-0">
-                            <div className="text-sm font-medium truncate">{fileLabel}</div>
+                            <div dir="auto" className="text-sm font-medium truncate">{fileLabel}</div>
                             <div className="text-xs opacity-80">
-                              {label}{meta?.size ? ` • ${formatFileSize(meta.size)}` : (src ? '' : ' • Loading file...')}
+                              {label}{meta?.size ? ` | ${formatFileSize(meta.size)}` : (src ? '' : ' | Loading file...')}
                             </div>
                           </div>
                         </div>
@@ -850,7 +890,7 @@ const Chat = () => {
                   <div className={`message-bubble ${
                     message.user_id === user.id ? 'own' : 'other'
                   }`}>
-                    <p className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
+                    <p dir="auto" className="text-sm whitespace-pre-wrap break-words">{message.content}</p>
                   </div>
                   )
                 })()}
@@ -901,72 +941,85 @@ const Chat = () => {
         onDrop={handleDrop}
       >
         <div className={`max-w-5xl mx-auto w-full space-y-3 ${isDragOver ? 'ring-2 ring-blue-400 rounded-xl p-2 -m-2' : ''}`}>
-          {pendingPreview && (
-            <div className="flex items-start space-x-3 rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-900">
-              <div className="w-24 h-24 overflow-hidden rounded-md bg-white dark:bg-gray-800 border dark:border-gray-700">
-                <img src={pendingPreview} alt="preview" className="w-full h-full object-cover" />
-              </div>
-              <div className="flex-1">
-                <p className="text-sm text-gray-700 dark:text-gray-100">Image ready to send</p>
-                <p className="text-xs text-gray-500 dark:text-gray-300">Press Send to upload with your next message.</p>
-              </div>
-              <button
-                onClick={() => {
-                  setPendingFile(null)
-                }}
-                className="text-gray-500 dark:text-gray-300 hover:text-red-500 text-sm"
-              >
-                Clear
-              </button>
-            </div>
-          )}
-          {!pendingPreview && pendingAttachment && (
-            <div className="flex items-center justify-between rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-900">
-              <div className="flex items-center space-x-3 min-w-0">
-                {(() => {
-                  const { Icon, label } = attachmentVisual({ filename: pendingAttachment.name, contentType: pendingAttachment.type })
-                  return (
-                    <>
-                      <div className="w-10 h-10 rounded-lg bg-white dark:bg-gray-800 border dark:border-gray-700 flex items-center justify-center">
-                        <Icon className="w-4 h-4 text-gray-500 dark:text-gray-300" />
+          {pendingAttachments.length > 0 && (
+            <div className="space-y-2 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+              {pendingAttachments.map((attachment) => {
+                const { file, id, previewUrl, progress, error } = attachment
+                const { Icon, label } = attachmentVisual({ filename: file?.name, contentType: file?.type })
+                return (
+                  <div
+                    key={id}
+                    className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-900"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start space-x-3 min-w-0 flex-1">
+                        {previewUrl ? (
+                          <div className="w-20 h-20 overflow-hidden rounded-md bg-white dark:bg-gray-800 border dark:border-gray-700 shrink-0">
+                            <img src={previewUrl} alt={file?.name || 'preview'} className="w-full h-full object-cover" />
+                          </div>
+                        ) : (
+                          <div className="w-10 h-10 rounded-lg bg-white dark:bg-gray-800 border dark:border-gray-700 flex items-center justify-center shrink-0">
+                            <Icon className="w-4 h-4 text-gray-500 dark:text-gray-300" />
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p dir="auto" className="text-sm text-gray-700 dark:text-gray-100 truncate">{file?.name || 'Attachment'}</p>
+                          <p className="text-xs text-gray-500 dark:text-gray-300 truncate">
+                            {previewUrl ? 'Image' : label}
+                            {file?.size ? ` | ${formatFileSize(file.size)}` : ''}
+                            {file?.type ? ` | ${file.type}` : ''}
+                          </p>
+                          {progress != null && (
+                            <div className="mt-2">
+                              <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-300 mb-1">
+                                <span>Uploading</span>
+                                <span>{progress}%</span>
+                              </div>
+                              <div className="h-2 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                                <div
+                                  className="h-full bg-blue-500 transition-all"
+                                  style={{ width: `${progress}%` }}
+                                />
+                              </div>
+                            </div>
+                          )}
+                          {error && (
+                            <p className="mt-1 text-xs text-red-600">{error}</p>
+                          )}
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-sm text-gray-700 dark:text-gray-100 truncate">{pendingAttachment.name}</p>
-                        <p className="text-xs text-gray-500 dark:text-gray-300">
-                          {label}{pendingAttachment.size ? ` • ${formatFileSize(pendingAttachment.size)}` : ''}{pendingAttachment.type ? ` • ${pendingAttachment.type}` : ''}
-                        </p>
-                      </div>
-                    </>
-                  )
-                })()}
-              </div>
-              <button
-                onClick={() => setPendingFile(null)}
-                className="text-gray-500 dark:text-gray-300 hover:text-red-500 text-sm"
-              >
-                Clear
-              </button>
-            </div>
-          )}
-          {uploading && uploadProgress != null && (
-            <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-900">
-              <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-300 mb-2">
-                <span>Uploading attachment</span>
-                <span>{uploadProgress}%</span>
-              </div>
-              <div className="h-2 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
-                <div
-                  className="h-full bg-blue-500 transition-all"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
+                      <button
+                        type="button"
+                        onClick={() => removePendingAttachment(id)}
+                        className="text-gray-500 dark:text-gray-300 hover:text-red-500 text-sm shrink-0"
+                        disabled={sending || uploading}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                )
+              })}
+              {pendingAttachments.length > 1 && (
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    onClick={clearPendingAttachments}
+                    className="text-xs text-gray-500 dark:text-gray-300 hover:text-red-500"
+                    disabled={sending || uploading}
+                  >
+                    Clear all
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
-          <div className="flex space-x-3 items-center">
+          <div className="flex space-x-3 items-end">
             <input
               ref={fileInputRef}
               type="file"
+              multiple
               className="hidden"
               onChange={handleFileInputChange}
             />
@@ -979,12 +1032,11 @@ const Chat = () => {
             >
               <Paperclip className="w-5 h-5" />
             </button>
-            <input
-              type="text"
+            <textarea
               value={newMessage}
               onChange={(e) => setNewMessage(e.target.value)}
               onPaste={handlePaste}
-              onKeyPress={(e) => {
+              onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault()
                   sendMessage()
@@ -992,12 +1044,14 @@ const Chat = () => {
               }}
               onInput={handleTyping}
               placeholder="Type a message..."
-              className="flex-1 input h-12"
+              dir="auto"
+              rows={1}
+              className="flex-1 input h-auto min-h-[3rem] max-h-32 py-3 resize-none leading-5 overflow-y-auto"
               disabled={!isConnected}
             />
             <button
               onClick={sendMessage}
-              disabled={( !newMessage.trim() && !pendingAttachment) || sending || uploading || !isConnected}
+              disabled={(!newMessage.trim() && pendingAttachments.length === 0) || sending || uploading || !isConnected}
               className="btn-primary px-6 disabled:opacity-50 disabled:cursor-not-allowed h-12"
             >
               {sending || uploading ? (
@@ -1014,7 +1068,7 @@ const Chat = () => {
           )}
           {isDragOver && (
             <p className="text-xs text-blue-600 dark:text-blue-300">
-              Drop a file to attach it to your next message
+              Drop file(s) to attach them to your next message
             </p>
           )}
           

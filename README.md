@@ -268,6 +268,7 @@ For support and questions:
 - Add rate limiting/body size limits for auth/messaging/uploads (main.go middleware, handlers).
 - Bound message payload sizes and validate WS payloads to prevent oversized writes (handlers.go, websocket.go).
 - Improve message storage/query: key messages per team/timestamp and add pagination to avoid full scans (database.go).
+- Add a super-admin/manager account role for platform-wide administration: password reset/recovery for users, permissions management, and global oversight tools.
 - Add tests for auth, username index integrity, membership enforcement, uploads ACL, and WS join/leave broadcasting (new _test.go files).
 
 ## Acknowledgments

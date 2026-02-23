@@ -43,6 +43,7 @@ type TeamMemberView struct {
 	TeamID   string    `json:"team_id"`
 	UserID   string    `json:"user_id"`
 	Username string    `json:"username"`
+	Name     string    `json:"name,omitempty"`
 	Role     string    `json:"role"`
 	JoinedAt time.Time `json:"joined_at"`
 }
@@ -141,9 +142,11 @@ func (s *TeamService) GetTeamMembers(teamID, requesterID string) ([]TeamMemberVi
 	result := make([]TeamMemberView, 0, len(members))
 	for _, m := range members {
 		username := ""
+		name := ""
 		if s.deps.Users != nil {
 			if u, err := s.deps.Users.GetUserByID(m.UserID); err == nil && u != nil {
 				username = u.Username
+				name = strings.TrimSpace(u.Name)
 			}
 		}
 		result = append(result, TeamMemberView{
@@ -151,6 +154,7 @@ func (s *TeamService) GetTeamMembers(teamID, requesterID string) ([]TeamMemberVi
 			TeamID:   m.TeamID,
 			UserID:   m.UserID,
 			Username: username,
+			Name:     name,
 			Role:     m.Role,
 			JoinedAt: m.JoinedAt,
 		})

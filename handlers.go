@@ -6,12 +6,39 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gorilla/mux"
 )
+
+func normalizeUploadFilename(name string) string {
+	if name == "" {
+		return ""
+	}
+	normalized := strings.ReplaceAll(name, `\u200f`, "\u200f")
+	normalized = strings.ReplaceAll(normalized, `\u200e`, "\u200e")
+
+	// Common browser/server mojibake case: UTF-8 bytes decoded as Latin-1/Windows-1252.
+	raw := make([]byte, 0, len(normalized))
+	for _, r := range normalized {
+		if r > 255 {
+			return normalized
+		}
+		raw = append(raw, byte(r))
+	}
+	if !utf8.Valid(raw) {
+		return normalized
+	}
+	decoded := string(raw)
+	if decoded == normalized {
+		return normalized
+	}
+	return decoded
+}
 
 // Auth handlers
 func handleRegister(w http.ResponseWriter, r *http.Request) {
@@ -482,7 +509,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 
 	// Save to BoltDB uploads bucket (associate owner; team linkage optional)
 	teamID := r.URL.Query().Get("team_id")
-	uploadID, err := saveUpload(header.Filename, contentType, userID, teamID, data)
+	uploadID, err := saveUpload(normalizeUploadFilename(header.Filename), contentType, userID, teamID, data)
 	if err != nil {
 		writeErrorResponse(w, http.StatusInternalServerError, "Failed to store file")
 		return
@@ -529,9 +556,23 @@ func handleGetUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	filename := normalizeUploadFilename(meta.Filename)
 	w.Header().Set("Content-Type", meta.ContentType)
-	w.Header().Set("X-Upload-Filename", meta.Filename)
-	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", meta.Filename))
+	w.Header().Set("X-Upload-Filename", filename)
+	fallbackName := filename
+	if fallbackName == "" {
+		fallbackName = "download"
+	}
+	fallbackName = strings.Map(func(r rune) rune {
+		if r < 32 || r > 126 || r == '"' || r == '\\' {
+			return '_'
+		}
+		return r
+	}, fallbackName)
+	if strings.Trim(fallbackName, "_ ") == "" {
+		fallbackName = "download"
+	}
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q; filename*=UTF-8''%s", fallbackName, url.PathEscape(filename)))
 	w.Header().Set("Cache-Control", "private, max-age=31536000")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)

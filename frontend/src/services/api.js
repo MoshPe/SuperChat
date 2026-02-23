@@ -15,12 +15,13 @@ api.interceptors.response.use(
   (error) => {
     const status = error.response?.status
     const requestUrl = error.config?.url || ''
+    const skipAuthRedirect = Boolean(error.config?.skipAuthRedirect)
     const currentPath = window.location.pathname
     const isAuthEndpoint =
       requestUrl.includes('/auth/login') || requestUrl.includes('/auth/register')
     const isOnAuthPage = currentPath.startsWith('/login') || currentPath.startsWith('/register')
 
-    if (status === 401 && !isAuthEndpoint && !isOnAuthPage) {
+    if (status === 401 && !skipAuthRedirect && !isAuthEndpoint && !isOnAuthPage) {
       // Token expired or invalid during an authenticated request; force re-auth
       window.location.href = '/login'
     }

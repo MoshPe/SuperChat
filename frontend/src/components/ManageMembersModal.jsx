@@ -101,7 +101,7 @@ const ManageMembersModal = ({ isOpen, onClose, teamId, ownerId }) => {
                     <div key={u.id} className="flex items-center justify-between py-3">
                       <div className="flex items-center space-x-3 min-w-0">
                         <div className="min-w-0">
-                          <p className="text-sm font-medium text-gray-900 truncate">{u.username}</p>
+                          <p className="text-sm font-medium text-gray-900 truncate">{u.name}</p>
                           {isMember && (
                             <p className="text-xs text-gray-500 truncate">Member</p>
                           )}

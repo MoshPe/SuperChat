@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { X, Trash2, LogOut, Upload, XCircle } from 'lucide-react'
+import { X, Trash2, LogOut, Upload, XCircle, ChevronDown } from 'lucide-react'
 import api from '../services/api'
 
 const TeamSettingsModal = ({
@@ -22,10 +22,12 @@ const TeamSettingsModal = ({
   const [members, setMembers] = useState([])
   const [loadingMembers, setLoadingMembers] = useState(false)
   const [transferTargetUserId, setTransferTargetUserId] = useState('')
+  const [isTransferMenuOpen, setIsTransferMenuOpen] = useState(false)
   const [transferring, setTransferring] = useState(false)
   const [actionError, setActionError] = useState('')
   const fileInputRef = useRef(null)
   const previewObjectUrlRef = useRef('')
+  const transferMenuRef = useRef(null)
 
   useEffect(() => {
     if (isOpen && team) {
@@ -33,6 +35,7 @@ const TeamSettingsModal = ({
       setDescription(team.description || '')
       setAvatar(team.avatar || '')
       setActionError('')
+      setIsTransferMenuOpen(false)
     }
   }, [isOpen, team])
 
@@ -130,7 +133,34 @@ const TeamSettingsModal = ({
     }
   }, [])
 
+  useEffect(() => {
+    if (!isTransferMenuOpen) return
+
+    const handleClickOutside = (event) => {
+      if (!transferMenuRef.current?.contains(event.target)) {
+        setIsTransferMenuOpen(false)
+      }
+    }
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') setIsTransferMenuOpen(false)
+    }
+
+    document.addEventListener('mousedown', handleClickOutside)
+    document.addEventListener('keydown', handleEscape)
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [isTransferMenuOpen])
+
   if (!isOpen) return null
+
+  const transferCandidates = members.filter((m) => m.user_id !== team?.owner_id)
+  const selectedTransferMember = transferCandidates.find((m) => m.user_id === transferTargetUserId)
+  const selectedTransferLabel = selectedTransferMember
+    ? `${selectedTransferMember.name || selectedTransferMember.username} (${selectedTransferMember.username})`
+    : 'Select a member'
 
   const handleSave = async (e) => {
     e.preventDefault()
@@ -177,6 +207,7 @@ const TeamSettingsModal = ({
     if (!window.confirm('Transfer team ownership to the selected member?')) return
 
     setTransferring(true)
+    setIsTransferMenuOpen(false)
     setActionError('')
     try {
       const res = await api.post(`/teams/${team.id}/transfer-ownership`, {
@@ -297,24 +328,50 @@ const TeamSettingsModal = ({
                 <p className="text-sm text-gray-500 dark:text-gray-300">Loading members...</p>
               ) : (
                 <div className="flex flex-col sm:flex-row gap-2">
-                  <select
-                    className="input flex-1"
-                    value={transferTargetUserId}
-                    onChange={(e) => setTransferTargetUserId(e.target.value)}
-                    disabled={transferring || members.filter((m) => m.user_id !== team.owner_id).length === 0}
-                  >
-                    {members.filter((m) => m.user_id !== team.owner_id).length === 0 ? (
-                      <option value="">No eligible members</option>
-                    ) : (
-                      members
-                        .filter((m) => m.user_id !== team.owner_id)
-                        .map((member) => (
-                          <option key={member.user_id} value={member.user_id}>
-                            {(member.name || member.username)} ({member.username})
-                          </option>
-                        ))
+                  <div className="relative flex-1" ref={transferMenuRef}>
+                    <button
+                      type="button"
+                      className="w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 pr-11 text-left text-sm text-gray-900 shadow-sm transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-primary-400 dark:bg-gray-800 dark:border-gray-700 dark:text-gray-100 dark:hover:bg-gray-700 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500 dark:disabled:bg-gray-900 dark:disabled:text-gray-400"
+                      onClick={() => setIsTransferMenuOpen((open) => !open)}
+                      disabled={transferring || transferCandidates.length === 0}
+                      aria-haspopup="listbox"
+                      aria-expanded={isTransferMenuOpen}
+                    >
+                      <span className="block truncate">
+                        {transferCandidates.length === 0 ? 'No eligible members' : selectedTransferLabel}
+                      </span>
+                    </button>
+                    <ChevronDown className={`pointer-events-none absolute right-4 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500 dark:text-gray-300 transition-transform ${isTransferMenuOpen ? 'rotate-180' : ''}`} />
+                    {isTransferMenuOpen && transferCandidates.length > 0 && (
+                      <div className="absolute z-20 mt-2 w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg ring-1 ring-black/5 dark:border-gray-700 dark:bg-gray-800">
+                        <div className="max-h-56 overflow-y-auto custom-scrollbar py-1" role="listbox" aria-label="Transfer ownership member">
+                          {transferCandidates.map((member) => {
+                            const label = `${member.name || member.username} (${member.username})`
+                            const isSelected = member.user_id === transferTargetUserId
+                            return (
+                              <button
+                                key={member.user_id}
+                                type="button"
+                                role="option"
+                                aria-selected={isSelected}
+                                onClick={() => {
+                                  setTransferTargetUserId(member.user_id)
+                                  setIsTransferMenuOpen(false)
+                                }}
+                                className={`w-full px-3 py-2 text-left text-sm transition-colors ${
+                                  isSelected
+                                    ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/30 dark:text-primary-200'
+                                    : 'text-gray-700 hover:bg-gray-50 dark:text-gray-100 dark:hover:bg-gray-700'
+                                }`}
+                              >
+                                <span className="block truncate">{label}</span>
+                              </button>
+                            )
+                          })}
+                        </div>
+                      </div>
                     )}
-                  </select>
+                  </div>
                   <button
                     type="button"
                     onClick={handleTransferOwnership}

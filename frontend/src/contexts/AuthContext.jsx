@@ -84,6 +84,8 @@ export const AuthProvider = ({ children }) => {
       await api.put('/user/password', {
         current_password: currentPassword,
         new_password: newPassword,
+      }, {
+        skipAuthRedirect: true,
       })
       return { success: true }
     } catch (error) {

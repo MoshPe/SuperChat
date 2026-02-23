@@ -10,6 +10,15 @@ import (
 	"testing"
 )
 
+func utf8AsLatin1Mojibake(s string) string {
+	b := []byte(s)
+	runes := make([]rune, len(b))
+	for i, v := range b {
+		runes[i] = rune(v)
+	}
+	return string(runes)
+}
+
 func uploadAuthReq(req *http.Request, userID, username string) *http.Request {
 	ctx := context.WithValue(req.Context(), "user_id", userID)
 	ctx = context.WithValue(ctx, "username", username)
@@ -95,4 +104,12 @@ func TestHandleUpload_UsesConfiguredMaxUploadBytes(t *testing.T) {
 			}
 		})
 	})
+}
+
+func TestNormalizeUploadFilename_DecodesHebrewMojibake(t *testing.T) {
+	want := "מסמך טקסט חדש.txt"
+	got := normalizeUploadFilename(utf8AsLatin1Mojibake(want))
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
 }
