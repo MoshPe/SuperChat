@@ -28,7 +28,8 @@ var (
 			return isAllowedWebSocketOrigin(r)
 		},
 	}
-	db *bbolt.DB
+	db             *bbolt.DB
+	maxUploadBytes int64 = 25 << 20
 )
 
 // CORS middleware
@@ -55,12 +56,17 @@ func main() {
 	port := flag.Int("port", 8443, "Port to run the server on")
 	allowedOrigins := flag.String("allowed-origins", "", "Comma-separated list of allowed WebSocket Origin values")
 	ttlMinutes := flag.Int("ttl-minutes", 7*24*60, "Retention TTL for messages/uploads in minutes")
+	maxUploadMB := flag.Int("max-upload-mb", 25, "Maximum upload size in MB for images/files")
 	flag.Parse()
 	setAllowedWebSocketOriginsFromCSV(*allowedOrigins)
 	if *ttlMinutes <= 0 {
 		log.Fatal("ttl-minutes must be > 0")
 	}
+	if *maxUploadMB <= 0 {
+		log.Fatal("max-upload-mb must be > 0")
+	}
 	retentionTTL := time.Duration(*ttlMinutes) * time.Minute
+	maxUploadBytes = int64(*maxUploadMB) << 20
 
 	// Initialize database
 	var err error

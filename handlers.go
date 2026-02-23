@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -444,13 +445,13 @@ func handleDeleteMessage(w http.ResponseWriter, r *http.Request) {
 	writeSuccessResponse(w, map[string]string{"id": messageID}, "Message deleted successfully")
 }
 
-// handleUpload handles image uploads and returns a public URL
+// handleUpload handles authenticated uploads and returns a protected API URL.
 func handleUpload(w http.ResponseWriter, r *http.Request) {
 	userID, _ := getUserFromContext(r)
 
-	// Limit upload size to 8MB
-	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
-	if err := r.ParseMultipartForm(8 << 20); err != nil {
+	// Limit upload size via runtime config (shared for images/files).
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
+	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
 		writeErrorResponse(w, http.StatusBadRequest, "File too large or invalid form")
 		return
 	}
@@ -469,14 +470,6 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	// Reset reader to start
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		writeErrorResponse(w, http.StatusInternalServerError, "Failed to read file")
-		return
-	}
-
-	// Allow only images
-	switch contentType {
-	case "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif":
-	default:
-		writeErrorResponse(w, http.StatusBadRequest, "Unsupported file type")
 		return
 	}
 
@@ -500,7 +493,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) {
 	writeSuccessResponse(w, map[string]string{"url": url}, "Upload successful")
 }
 
-// handleGetUpload streams an uploaded image by ID
+// handleGetUpload streams an uploaded file by ID
 func handleGetUpload(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	id := vars["id"]
@@ -537,6 +530,8 @@ func handleGetUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", meta.ContentType)
+	w.Header().Set("X-Upload-Filename", meta.Filename)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", meta.Filename))
 	w.Header().Set("Cache-Control", "private, max-age=31536000")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)

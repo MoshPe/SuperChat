@@ -8,7 +8,15 @@ import {
   MoreVertical,
   LogOut,
   UserPlus,
-  Settings
+  Settings,
+  Paperclip,
+  File,
+  FileText,
+  FileArchive,
+  FileCode,
+  FileSpreadsheet,
+  FileAudio,
+  FileVideo
 } from 'lucide-react'
 import api from '../services/api'
 import ManageMembersModal from '../components/ManageMembersModal'
@@ -24,10 +32,13 @@ const Chat = () => {
   const [loading, setLoading] = useState(true)
   const [sending, setSending] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [pendingImage, setPendingImage] = useState(null)
+  const [pendingAttachment, setPendingAttachment] = useState(null)
   const [pendingPreview, setPendingPreview] = useState(null)
   const [imageUrls, setImageUrls] = useState({})
   const imageUrlsRef = useRef({})
+  const [attachmentMeta, setAttachmentMeta] = useState({})
+  const attachmentMetaRef = useRef({})
+  const fileInputRef = useRef(null)
   const wsRef = useRef(null)
   const [isConnected, setIsConnected] = useState(false)
   const [typingUsers, setTypingUsers] = useState(new Set())
@@ -43,6 +54,9 @@ const Chat = () => {
   const { setServerDown } = useStatus()
   const [teamAvatarUrl, setTeamAvatarUrl] = useState('')
   const teamAvatarObjRef = useRef(null)
+  const [uploadError, setUploadError] = useState('')
+  const [isDragOver, setIsDragOver] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState(null)
 
   const checkMembership = async () => {
     try {
@@ -93,10 +107,22 @@ const Chat = () => {
 
   // Fetch protected image blobs with auth header and cache object URLs
   useEffect(() => {
+    const parseFilename = (headers) => {
+      const fromHeader = headers?.['x-upload-filename']
+      if (fromHeader) return fromHeader
+      const cd = headers?.['content-disposition'] || ''
+      const utf8Match = cd.match(/filename\*=UTF-8''([^;]+)/i)
+      if (utf8Match?.[1]) {
+        try { return decodeURIComponent(utf8Match[1]) } catch {}
+      }
+      const plainMatch = cd.match(/filename=\"?([^\";]+)\"?/i)
+      return plainMatch?.[1] || ''
+    }
+
     const loadImages = async () => {
       for (const msg of messages) {
-        const isImage = msg.type === 'image' || (typeof msg.content === 'string' && msg.content.startsWith('/api/uploads/'))
-        if (!isImage) continue
+        const isUpload = typeof msg.content === 'string' && msg.content.startsWith('/api/uploads/')
+        if (!isUpload) continue
         const key = msg.id || msg.content
         if (!key || imageUrlsRef.current[key]) continue
         try {
@@ -109,6 +135,13 @@ const Chat = () => {
           const objectUrl = URL.createObjectURL(res.data)
           imageUrlsRef.current[key] = objectUrl
           setImageUrls(prev => ({ ...prev, [key]: objectUrl }))
+          const meta = {
+            filename: parseFilename(res.headers),
+            contentType: res.data?.type || res.headers?.['content-type'] || '',
+            size: Number(res.headers?.['content-length']) || res.data?.size || 0,
+          }
+          attachmentMetaRef.current[key] = meta
+          setAttachmentMeta(prev => ({ ...prev, [key]: meta }))
         } catch (err) {
           console.error('Failed to load image', err)
         }
@@ -123,6 +156,76 @@ const Chat = () => {
       Object.values(imageUrlsRef.current).forEach(url => URL.revokeObjectURL(url))
     }
   }, [])
+
+  const isImageFile = (file) => !!file && typeof file.type === 'string' && file.type.startsWith('image/')
+
+  const attachmentVisual = ({ filename = '', contentType = '' } = {}) => {
+    const name = String(filename || '').toLowerCase()
+    const type = String(contentType || '').toLowerCase()
+    const ext = name.includes('.') ? name.split('.').pop() : ''
+
+    if (type.startsWith('audio/') || ['mp3', 'wav', 'ogg', 'm4a', 'flac'].includes(ext)) {
+      return { Icon: FileAudio, label: 'Audio' }
+    }
+    if (type.startsWith('video/') || ['mp4', 'mov', 'mkv', 'avi', 'webm'].includes(ext)) {
+      return { Icon: FileVideo, label: 'Video' }
+    }
+    if (type === 'application/pdf' || ext === 'pdf') {
+      return { Icon: FileText, label: 'PDF' }
+    }
+    if (
+      type.includes('zip') ||
+      type.includes('compressed') ||
+      ['zip', 'rar', '7z', 'tar', 'gz', 'tgz'].includes(ext)
+    ) {
+      return { Icon: FileArchive, label: 'Archive' }
+    }
+    if (
+      type.includes('json') || type.includes('xml') || type.includes('javascript') || type.includes('typescript') ||
+      type.includes('x-shellscript') || type.startsWith('text/') ||
+      ['js', 'ts', 'tsx', 'jsx', 'json', 'xml', 'yml', 'yaml', 'html', 'css', 'md', 'txt', 'go', 'py', 'java', 'c', 'cpp', 'rs', 'sh'].includes(ext)
+    ) {
+      return { Icon: FileCode, label: 'Code/Text' }
+    }
+    if (
+      type.includes('spreadsheet') || type.includes('excel') ||
+      ['xls', 'xlsx', 'csv'].includes(ext)
+    ) {
+      return { Icon: FileSpreadsheet, label: 'Spreadsheet' }
+    }
+    if (
+      type.includes('word') || type.includes('document') || type.includes('presentation') ||
+      ['doc', 'docx', 'ppt', 'pptx', 'odt'].includes(ext)
+    ) {
+      return { Icon: FileText, label: 'Document' }
+    }
+    return { Icon: File, label: 'File' }
+  }
+
+  const formatFileSize = (bytes) => {
+    const n = Number(bytes)
+    if (!Number.isFinite(n) || n <= 0) return ''
+    if (n < 1024) return `${n} B`
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  const setPendingFile = (file) => {
+    setUploadError('')
+    setUploadProgress(null)
+    if (pendingPreview) URL.revokeObjectURL(pendingPreview)
+    if (!file) {
+      setPendingAttachment(null)
+      setPendingPreview(null)
+      return
+    }
+    setPendingAttachment(file)
+    if (isImageFile(file)) {
+      setPendingPreview(URL.createObjectURL(file))
+    } else {
+      setPendingPreview(null)
+    }
+  }
 
   // Load team avatar (protected endpoint) to use as img src
   useEffect(() => {
@@ -343,16 +446,20 @@ const Chat = () => {
 
   const sendMessage = async () => {
     if (sending) return
-    if (!pendingImage && !newMessage.trim()) return
+    if (!pendingAttachment && !newMessage.trim()) return
 
     setSending(true)
+    setUploadError('')
 
     try {
-      // Send pending image first (if any)
-      if (pendingImage) {
-        await uploadImageAndSend(pendingImage)
-        setPendingImage(null)
-        setPendingPreview(null)
+      // Send pending attachment first (if any)
+      if (pendingAttachment) {
+        await uploadAttachmentAndSend(pendingAttachment)
+        setPendingAttachment(null)
+        if (pendingPreview) {
+          URL.revokeObjectURL(pendingPreview)
+          setPendingPreview(null)
+        }
       }
 
       // Send text message if provided
@@ -376,40 +483,59 @@ const Chat = () => {
       }
     } catch (error) {
       console.error('Failed to send message:', error)
+      const msg = error.response?.data?.error || error.response?.data?.message || error.message || 'Failed to send message'
+      setUploadError(msg)
     } finally {
       setSending(false)
     }
   }
 
-  const uploadImageAndSend = async (file) => {
+  const uploadAttachmentAndSend = async (file) => {
     try {
       setUploading(true)
+      setUploadProgress(0)
       const form = new FormData()
       form.append('file', file)
       const res = await api.post(`/upload?team_id=${teamId}`, form, {
-        headers: { 'Content-Type': 'multipart/form-data' }
+        headers: { 'Content-Type': 'multipart/form-data' },
+        onUploadProgress: (event) => {
+          if (!event) return
+          if (!event.total || event.total <= 0) return
+          const next = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)))
+          setUploadProgress(next)
+        },
       })
       const url = res.data.data?.url
       if (!url) return
-      // Seed local image cache with preview if available
-      if (pendingPreview) {
+      const msgType = isImageFile(file) ? 'image' : 'file'
+      // Seed local cache with preview for images and metadata for all attachments
+      if (msgType === 'image' && pendingPreview) {
         imageUrlsRef.current[url] = pendingPreview
         setImageUrls(prev => ({ ...prev, [url]: pendingPreview }))
-        setPendingPreview(null)
       }
+      const meta = { filename: file.name || '', contentType: file.type || '', size: file.size || 0 }
+      attachmentMetaRef.current[url] = meta
+      setAttachmentMeta(prev => ({ ...prev, [url]: meta }))
       // Prefer WS if connected
       if (wsRef.current && isConnected) {
         wsRef.current.send(JSON.stringify({
           type: 'chat_message',
-          payload: { content: url, type: 'image' }
+          payload: { content: url, type: msgType }
         }))
       } else {
-        await api.post(`/teams/${teamId}/messages`, { content: url, type: 'image' })
+        const msgRes = await api.post(`/teams/${teamId}/messages`, { content: url, type: msgType })
+        if (msgRes.data?.data) {
+          setMessages(prev => [...prev, msgRes.data.data])
+        }
       }
     } catch (e) {
       console.error('Upload failed', e)
+      const msg = e.response?.data?.error || e.response?.data?.message || 'Upload failed'
+      setUploadError(msg)
+      throw e
     } finally {
       setUploading(false)
+      setUploadProgress(null)
     }
   }
 
@@ -422,13 +548,36 @@ const Chat = () => {
         const file = it.getAsFile()
         if (file) {
           e.preventDefault()
-          if (pendingPreview) URL.revokeObjectURL(pendingPreview)
-          setPendingImage(file)
-          setPendingPreview(URL.createObjectURL(file))
+          setPendingFile(file)
           break
         }
       }
     }
+  }
+
+  const handleFileInputChange = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setPendingFile(file)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const handleDragOver = (e) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return
+    e.preventDefault()
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = (e) => {
+    if (e.currentTarget.contains(e.relatedTarget)) return
+    setIsDragOver(false)
+  }
+
+  const handleDrop = (e) => {
+    if (!e.dataTransfer?.files?.length) return
+    e.preventDefault()
+    setIsDragOver(false)
+    setPendingFile(e.dataTransfer.files[0])
   }
 
   const deleteMessage = async (messageId) => {
@@ -647,9 +796,11 @@ const Chat = () => {
             >
               <div className={`relative max-w-xs lg:max-w-md ${message.user_id === user.id ? 'text-right' : ''}`}>
                 {(() => {
-                  const isImage = message.type === 'image' || (typeof message.content === 'string' && message.content.startsWith('/api/uploads/'))
+                  const isUpload = typeof message.content === 'string' && message.content.startsWith('/api/uploads/')
+                  const isImage = message.type === 'image'
+                  const isFileAttachment = message.type === 'file' || (isUpload && !isImage)
                   const key = message.id || message.content
-                  if (isImage) {
+                  if (isImage && isUpload) {
                     const src = key ? imageUrls[key] : null
                     return (
                       <div className={`message-bubble ${message.user_id === user.id ? 'own' : 'other'} p-1`}>
@@ -659,6 +810,38 @@ const Chat = () => {
                           </a>
                         ) : (
                           <div className="text-xs text-gray-500 px-2 py-1">Loading image...</div>
+                        )}
+                      </div>
+                    )
+                  }
+                  if (isFileAttachment) {
+                    const src = key ? imageUrls[key] : null
+                    const meta = key ? attachmentMeta[key] : null
+                    const fileLabel = meta?.filename || 'Attachment'
+                    const { Icon, label } = attachmentVisual(meta || {})
+                    return (
+                      <div className={`message-bubble ${message.user_id === user.id ? 'own' : 'other'} p-3`}>
+                        <div className="flex items-center space-x-3">
+                          <div className="w-9 h-9 rounded-lg bg-white/70 dark:bg-gray-800/70 border border-gray-200 dark:border-gray-700 flex items-center justify-center">
+                            <Icon className="w-4 h-4" />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium truncate">{fileLabel}</div>
+                            <div className="text-xs opacity-80">
+                              {label}{meta?.size ? ` • ${formatFileSize(meta.size)}` : (src ? '' : ' • Loading file...')}
+                            </div>
+                          </div>
+                        </div>
+                        {src && (
+                          <a
+                            href={src}
+                            target="_blank"
+                            rel="noreferrer"
+                            download={meta?.filename || undefined}
+                            className="mt-2 inline-flex text-xs underline underline-offset-2"
+                          >
+                            Open / Download
+                          </a>
                         )}
                       </div>
                     )
@@ -708,8 +891,16 @@ const Chat = () => {
       </div>
 
       {/* Message input */}
-      <div className="shrink-0 bg-white border-t border-gray-200 dark:bg-gray-800 dark:border-gray-700 p-4 pt-3 pb-3">
-        <div className="max-w-5xl mx-auto w-full space-y-3">
+      <div
+        className={`shrink-0 bg-white border-t border-gray-200 dark:bg-gray-800 dark:border-gray-700 p-4 pt-3 pb-3 transition-colors ${
+          isDragOver ? 'bg-blue-50 dark:bg-blue-950/20' : ''
+        }`}
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        <div className={`max-w-5xl mx-auto w-full space-y-3 ${isDragOver ? 'ring-2 ring-blue-400 rounded-xl p-2 -m-2' : ''}`}>
           {pendingPreview && (
             <div className="flex items-start space-x-3 rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-900">
               <div className="w-24 h-24 overflow-hidden rounded-md bg-white dark:bg-gray-800 border dark:border-gray-700">
@@ -721,9 +912,7 @@ const Chat = () => {
               </div>
               <button
                 onClick={() => {
-                  if (pendingPreview) URL.revokeObjectURL(pendingPreview)
-                  setPendingPreview(null)
-                  setPendingImage(null)
+                  setPendingFile(null)
                 }}
                 className="text-gray-500 dark:text-gray-300 hover:text-red-500 text-sm"
               >
@@ -731,8 +920,65 @@ const Chat = () => {
               </button>
             </div>
           )}
+          {!pendingPreview && pendingAttachment && (
+            <div className="flex items-center justify-between rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-900">
+              <div className="flex items-center space-x-3 min-w-0">
+                {(() => {
+                  const { Icon, label } = attachmentVisual({ filename: pendingAttachment.name, contentType: pendingAttachment.type })
+                  return (
+                    <>
+                      <div className="w-10 h-10 rounded-lg bg-white dark:bg-gray-800 border dark:border-gray-700 flex items-center justify-center">
+                        <Icon className="w-4 h-4 text-gray-500 dark:text-gray-300" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-sm text-gray-700 dark:text-gray-100 truncate">{pendingAttachment.name}</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-300">
+                          {label}{pendingAttachment.size ? ` • ${formatFileSize(pendingAttachment.size)}` : ''}{pendingAttachment.type ? ` • ${pendingAttachment.type}` : ''}
+                        </p>
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+              <button
+                onClick={() => setPendingFile(null)}
+                className="text-gray-500 dark:text-gray-300 hover:text-red-500 text-sm"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+          {uploading && uploadProgress != null && (
+            <div className="rounded-lg border border-gray-200 dark:border-gray-700 p-3 bg-gray-50 dark:bg-gray-900">
+              <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-300 mb-2">
+                <span>Uploading attachment</span>
+                <span>{uploadProgress}%</span>
+              </div>
+              <div className="h-2 rounded-full bg-gray-200 dark:bg-gray-700 overflow-hidden">
+                <div
+                  className="h-full bg-blue-500 transition-all"
+                  style={{ width: `${uploadProgress}%` }}
+                />
+              </div>
+            </div>
+          )}
 
           <div className="flex space-x-3 items-center">
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              onChange={handleFileInputChange}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="btn-outline px-3 h-12"
+              disabled={sending || uploading || !isConnected}
+              title="Attach file"
+            >
+              <Paperclip className="w-5 h-5" />
+            </button>
             <input
               type="text"
               value={newMessage}
@@ -751,7 +997,7 @@ const Chat = () => {
             />
             <button
               onClick={sendMessage}
-              disabled={( !newMessage.trim() && !pendingImage) || sending || uploading || !isConnected}
+              disabled={( !newMessage.trim() && !pendingAttachment) || sending || uploading || !isConnected}
               className="btn-primary px-6 disabled:opacity-50 disabled:cursor-not-allowed h-12"
             >
               {sending || uploading ? (
@@ -761,6 +1007,16 @@ const Chat = () => {
               )}
             </button>
           </div>
+          {uploadError && (
+            <p className="text-xs text-red-600">
+              {uploadError}
+            </p>
+          )}
+          {isDragOver && (
+            <p className="text-xs text-blue-600 dark:text-blue-300">
+              Drop a file to attach it to your next message
+            </p>
+          )}
           
           {!isConnected && (
             <p className="text-xs text-red-600">
