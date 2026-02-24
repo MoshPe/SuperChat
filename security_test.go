@@ -7,7 +7,7 @@ import (
 
 func TestIsAllowedWebSocketOrigin_AllowsSameHostnameDifferentPort(t *testing.T) {
 	orig := append([]string(nil), allowedWebSocketOrigins...)
-	setAllowedWebSocketOriginsFromCSV("")
+	setAllowedWebSocketOriginsFromCSV("https://admin.example.com")
 	defer func() { allowedWebSocketOrigins = orig }()
 
 	r := httptest.NewRequest("GET", "http://localhost:8080/api/ws/team", nil)
@@ -21,7 +21,7 @@ func TestIsAllowedWebSocketOrigin_AllowsSameHostnameDifferentPort(t *testing.T) 
 
 func TestIsAllowedWebSocketOrigin_RejectsDifferentHostname(t *testing.T) {
 	orig := append([]string(nil), allowedWebSocketOrigins...)
-	setAllowedWebSocketOriginsFromCSV("")
+	setAllowedWebSocketOriginsFromCSV("https://admin.example.com")
 	defer func() { allowedWebSocketOrigins = orig }()
 
 	r := httptest.NewRequest("GET", "http://localhost:8080/api/ws/team", nil)
@@ -47,6 +47,20 @@ func TestIsAllowedWebSocketOrigin_AllowsExplicitAllowlist(t *testing.T) {
 	}
 }
 
+func TestIsAllowedWebSocketOrigin_AllowsWildcardAllowlist(t *testing.T) {
+	orig := append([]string(nil), allowedWebSocketOrigins...)
+	setAllowedWebSocketOriginsFromCSV("*")
+	defer func() { allowedWebSocketOrigins = orig }()
+
+	r := httptest.NewRequest("GET", "http://localhost:8080/api/ws/team", nil)
+	r.Host = "localhost:8080"
+	r.Header.Set("Origin", "https://any-origin.example")
+
+	if !isAllowedWebSocketOrigin(r) {
+		t.Fatal("expected wildcard allowlist to allow any origin")
+	}
+}
+
 func TestSetAllowedWebSocketOriginsFromCSV_TrimsAndSkipsEmpty(t *testing.T) {
 	orig := append([]string(nil), allowedWebSocketOrigins...)
 	defer func() { allowedWebSocketOrigins = orig }()
@@ -58,6 +72,17 @@ func TestSetAllowedWebSocketOriginsFromCSV_TrimsAndSkipsEmpty(t *testing.T) {
 	}
 	if allowedWebSocketOrigins[0] != "https://a.example" || allowedWebSocketOrigins[1] != "https://b.example" {
 		t.Fatalf("unexpected parsed origins: %#v", allowedWebSocketOrigins)
+	}
+}
+
+func TestSetAllowedWebSocketOriginsFromCSV_EmptyDefaultsToWildcard(t *testing.T) {
+	orig := append([]string(nil), allowedWebSocketOrigins...)
+	defer func() { allowedWebSocketOrigins = orig }()
+
+	setAllowedWebSocketOriginsFromCSV("")
+
+	if len(allowedWebSocketOrigins) != 1 || allowedWebSocketOrigins[0] != "*" {
+		t.Fatalf("expected wildcard default, got %#v", allowedWebSocketOrigins)
 	}
 }
 

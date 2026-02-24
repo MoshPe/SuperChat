@@ -30,6 +30,10 @@ func isAllowedWebSocketOrigin(r *http.Request) bool {
 
 func setAllowedWebSocketOriginsFromCSV(raw string) {
 	allowedWebSocketOrigins = allowedWebSocketOrigins[:0]
+	if strings.TrimSpace(raw) == "" {
+		allowedWebSocketOrigins = append(allowedWebSocketOrigins, "*")
+		return
+	}
 	for _, item := range strings.Split(raw, ",") {
 		item = strings.TrimSpace(item)
 		if item == "" {
@@ -41,6 +45,9 @@ func setAllowedWebSocketOriginsFromCSV(raw string) {
 
 func originAllowedByConfig(origin string) bool {
 	for _, item := range allowedWebSocketOrigins {
+		if item == "*" {
+			return true
+		}
 		if strings.EqualFold(item, origin) {
 			return true
 		}
