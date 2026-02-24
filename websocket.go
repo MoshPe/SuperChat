@@ -164,6 +164,10 @@ func (c *Client) readPump(room *TeamRoom) {
 			c.handleChatMessage(room, wsMessage)
 		case "typing":
 			c.handleTyping(room, wsMessage)
+		case "screen_share_request_start":
+			c.handleScreenShareRequestStart(room)
+		case "screen_share_stop":
+			c.handleScreenShareStop(room)
 		case "ping":
 			c.handlePing()
 		default:
@@ -296,10 +300,15 @@ func (c *Client) disconnect(room *TeamRoom) {
 		delete(room.Clients, c)
 		room.Mutex.Unlock()
 
+		// If this client was the active screen sharer, release and notify viewers.
+		releaseScreenShareForChatClientDisconnect(room, c)
+
 		// Safe close of send channel
 		close(c.Send)
 		// Close websocket connection
-		_ = c.Conn.Close()
+		if c.Conn != nil {
+			_ = c.Conn.Close()
+		}
 
 		// Send leave notification
 		leaveMessage := WebSocketMessage{

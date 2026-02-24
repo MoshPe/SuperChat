@@ -149,6 +149,7 @@ func main() {
 
 	// WebSocket endpoint
 	api.HandleFunc("/ws/{teamId}", handleWebSocket)
+	api.HandleFunc("/ws/{teamId}/screen", handleScreenStreamWebSocket)
 
 	// Redirect bare chat path (no team) to login to avoid client-side redirect loops
 	r.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {

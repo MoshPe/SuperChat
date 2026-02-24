@@ -23,6 +23,9 @@ import api from '../services/api'
 import ManageMembersModal from '../components/ManageMembersModal'
 import TeamSettingsModal from '../components/TeamSettingsModal'
 
+const SCREEN_VIEWER_MAX_QUEUED_CHUNKS = 48
+const SCREEN_VIEWER_RECONNECT_DELAYS_MS = [400, 800, 1200, 1600]
+
 const Chat = () => {
   const { teamId } = useParams()
   const navigate = useNavigate()
@@ -57,6 +60,35 @@ const Chat = () => {
   const teamAvatarObjRef = useRef(null)
   const [uploadError, setUploadError] = useState('')
   const [isDragOver, setIsDragOver] = useState(false)
+  const [activeScreenShare, setActiveScreenShare] = useState(null)
+  const [screenShareDeniedInfo, setScreenShareDeniedInfo] = useState(null)
+  const [screenShareError, setScreenShareError] = useState('')
+  const [screenSharePendingStart, setScreenSharePendingStart] = useState(false)
+  const [isScreenSharePublisher, setIsScreenSharePublisher] = useState(false)
+  const activeScreenShareRef = useRef(null)
+  const screenPublishWsRef = useRef(null)
+  const screenMediaStreamRef = useRef(null)
+  const screenMediaRecorderRef = useRef(null)
+  const screenPublisherStartingRef = useRef(false)
+  const screenPublisherStoppingRef = useRef(false)
+  const screenViewerVideoRef = useRef(null)
+  const screenViewerWsRef = useRef(null)
+  const screenViewerSessionRef = useRef('')
+  const screenViewerStoppingRef = useRef(false)
+  const screenViewerReconnectTimerRef = useRef(null)
+  const screenViewerReconnectAttemptRef = useRef(0)
+  const screenViewerMediaSourceRef = useRef(null)
+  const screenViewerSourceBufferRef = useRef(null)
+  const screenViewerSourceOpenHandlerRef = useRef(null)
+  const screenViewerUpdateEndHandlerRef = useRef(null)
+  const screenViewerObjectUrlRef = useRef('')
+  const screenViewerChunkQueueRef = useRef([])
+  const screenViewerPendingInitRef = useRef(null)
+  const screenViewerTrimInProgressRef = useRef(false)
+  const [screenViewerConnected, setScreenViewerConnected] = useState(false)
+  const [screenViewerReady, setScreenViewerReady] = useState(false)
+  const [screenViewerError, setScreenViewerError] = useState('')
+  const [screenViewerMimeType, setScreenViewerMimeType] = useState('')
 
   const checkMembership = async () => {
     try {
@@ -91,6 +123,13 @@ const Chat = () => {
       // Clear any pending typing timeouts
       typingTimeoutsRef.current.forEach((t) => clearTimeout(t))
       typingTimeoutsRef.current.clear()
+      setActiveScreenShare(null)
+      setScreenShareDeniedInfo(null)
+      setScreenShareError('')
+      setScreenSharePendingStart(false)
+      setIsScreenSharePublisher(false)
+      stopLocalScreenSharePublisher({ notifyServer: false, clearLocalState: true })
+      stopLocalScreenShareViewer({ clearState: true, preserveError: false })
     }
   }, [teamId, token])
 
@@ -101,6 +140,20 @@ const Chat = () => {
   useEffect(() => {
     pendingAttachmentsRef.current = pendingAttachments
   }, [pendingAttachments])
+
+  useEffect(() => {
+    activeScreenShareRef.current = activeScreenShare
+  }, [activeScreenShare])
+
+  const clearScreenViewerReconnectTimer = ({ resetAttempts = false } = {}) => {
+    if (screenViewerReconnectTimerRef.current) {
+      clearTimeout(screenViewerReconnectTimerRef.current)
+      screenViewerReconnectTimerRef.current = null
+    }
+    if (resetAttempts) {
+      screenViewerReconnectAttemptRef.current = 0
+    }
+  }
 
   // Cleanup pending preview URLs on unmount
   useEffect(() => {
@@ -472,9 +525,668 @@ const Chat = () => {
         }))
         break
       }
+      case 'screen_share_start_granted': {
+        const sessionId = data.payload?.session_id
+        const sharerUserId = data.payload?.sharer_user_id || user?.id
+        const sharerName = data.payload?.sharer_name || user?.name || user?.username || 'User'
+        setScreenSharePendingStart(false)
+        setScreenShareDeniedInfo(null)
+        setScreenShareError('')
+        if (!sessionId) {
+          setScreenShareError('Screen share start was granted, but no session ID was provided.')
+          break
+        }
+        setIsScreenSharePublisher(true)
+        setActiveScreenShare({
+          sessionId,
+          sharerUserId,
+          sharerName,
+          status: 'granted',
+        })
+        break
+      }
+      case 'screen_share_denied': {
+        setScreenSharePendingStart(false)
+        setIsScreenSharePublisher(false)
+        setScreenShareDeniedInfo({
+          sharerUserId: data.payload?.sharer_user_id || '',
+          sharerName: data.payload?.sharer_name || 'Another member',
+          reason: data.payload?.reason || 'already_active',
+          activeSession: data.payload?.active_session || '',
+        })
+        if (data.payload?.sharer_user_id !== activeScreenShare?.sharerUserId) {
+          setActiveScreenShare((prev) => prev && prev.status === 'started' ? prev : null)
+        }
+        break
+      }
+      case 'screen_share_started': {
+        const sessionId = data.payload?.session_id
+        const sharerUserId = data.payload?.sharer_user_id
+        const sharerName = data.payload?.sharer_name || 'Member'
+        if (!sessionId || !sharerUserId) break
+        setScreenSharePendingStart(false)
+        setScreenShareDeniedInfo(null)
+        setScreenShareError('')
+        setActiveScreenShare({
+          sessionId,
+          sharerUserId,
+          sharerName,
+          status: 'started',
+        })
+        setIsScreenSharePublisher(sharerUserId === user?.id)
+        break
+      }
+      case 'screen_share_stopped': {
+        const stoppedSessionId = data.payload?.session_id
+        const reason = data.payload?.reason
+        const shouldStopLocalPublisher =
+          isScreenSharePublisher &&
+          (!stoppedSessionId || stoppedSessionId === activeScreenShareRef.current?.sessionId)
+        const shouldStopLocalViewer =
+          !!screenViewerWsRef.current &&
+          (!stoppedSessionId || stoppedSessionId === activeScreenShareRef.current?.sessionId)
+        if (shouldStopLocalPublisher) {
+          stopLocalScreenSharePublisher({ notifyServer: false, clearLocalState: false })
+        }
+        if (shouldStopLocalViewer) {
+          stopLocalScreenShareViewer({ clearState: true, preserveError: false })
+        }
+        setScreenSharePendingStart(false)
+        setIsScreenSharePublisher(false)
+        setActiveScreenShare((prev) => {
+          if (!prev) return null
+          if (stoppedSessionId && prev.sessionId && prev.sessionId !== stoppedSessionId) return prev
+          return null
+        })
+        if (reason && reason !== 'stopped_by_sharer') {
+          setScreenShareError('Screen sharing ended.')
+        }
+        break
+      }
+      case 'screen_share_error': {
+        setScreenSharePendingStart(false)
+        const msg = data.payload?.message || 'Screen sharing error'
+        setScreenShareError(msg)
+        break
+      }
       default:
         console.log('Unknown message type:', data.type)
     }
+  }
+
+  const pickScreenShareMimeType = () => {
+    if (typeof window === 'undefined' || typeof window.MediaRecorder === 'undefined') return ''
+    const candidates = [
+      'video/webm;codecs=vp9',
+      'video/webm;codecs=vp8',
+      'video/webm',
+    ]
+    for (const mime of candidates) {
+      try {
+        if (window.MediaRecorder.isTypeSupported?.(mime)) return mime
+      } catch {}
+    }
+    return ''
+  }
+
+  const buildScreenStreamWsUrl = (sessionId, role) => {
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws'
+    return `${protocol}://${window.location.host}/api/ws/${teamId}/screen?token=${encodeURIComponent(token)}&role=${encodeURIComponent(role)}&session_id=${encodeURIComponent(sessionId)}`
+  }
+
+  const stopLocalScreenSharePublisher = ({ notifyServer = false, clearLocalState = false } = {}) => {
+    if (screenPublisherStoppingRef.current) return
+    screenPublisherStoppingRef.current = true
+
+    const recorder = screenMediaRecorderRef.current
+    const stream = screenMediaStreamRef.current
+    const publishWs = screenPublishWsRef.current
+
+    screenMediaRecorderRef.current = null
+    screenMediaStreamRef.current = null
+    screenPublishWsRef.current = null
+    screenPublisherStartingRef.current = false
+
+    try {
+      if (recorder && recorder.state !== 'inactive') recorder.stop()
+    } catch {}
+    try {
+      if (stream) {
+        stream.getTracks().forEach((track) => {
+          try { track.onended = null } catch {}
+          try { track.stop() } catch {}
+        })
+      }
+    } catch {}
+    try {
+      if (publishWs) {
+        try { publishWs.onopen = null; publishWs.onmessage = null; publishWs.onclose = null; publishWs.onerror = null } catch {}
+        if (publishWs.readyState === WebSocket.OPEN || publishWs.readyState === WebSocket.CONNECTING) {
+          publishWs.close()
+        }
+      }
+    } catch {}
+
+    if (notifyServer && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      try {
+        wsRef.current.send(JSON.stringify({
+          type: 'screen_share_stop',
+          payload: {},
+        }))
+      } catch {}
+    }
+
+    if (clearLocalState) {
+      setScreenSharePendingStart(false)
+      setIsScreenSharePublisher(false)
+      setActiveScreenShare(null)
+    }
+
+    // Release stop guard on next macrotask so nested callbacks don't immediately re-enter.
+    setTimeout(() => { screenPublisherStoppingRef.current = false }, 0)
+  }
+
+  const startScreenSharePublisher = async (share) => {
+    if (!share?.sessionId || !token) return
+    if (screenPublisherStartingRef.current || screenMediaRecorderRef.current || screenPublishWsRef.current) return
+
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      setScreenSharePendingStart(false)
+      setScreenShareError('Screen capture is not supported in this browser.')
+      setIsScreenSharePublisher(false)
+      return
+    }
+
+    if (typeof window === 'undefined' || typeof window.MediaRecorder === 'undefined') {
+      setScreenSharePendingStart(false)
+      setScreenShareError('MediaRecorder is not available in this browser.')
+      setIsScreenSharePublisher(false)
+      return
+    }
+
+    screenPublisherStartingRef.current = true
+    setScreenShareError('')
+    setActiveScreenShare((prev) => {
+      if (!prev || prev.sessionId !== share.sessionId) return prev
+      return { ...prev, status: 'starting' }
+    })
+
+    let stream = null
+    let publishWs = null
+    let recorder = null
+
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: { ideal: 30, max: 30 },
+        },
+        audio: false,
+      })
+
+      const currentShare = activeScreenShareRef.current
+      if (!currentShare || currentShare.sessionId !== share.sessionId) {
+        stream.getTracks().forEach((track) => { try { track.stop() } catch {} })
+        return
+      }
+
+      screenMediaStreamRef.current = stream
+      const videoTrack = stream.getVideoTracks?.()[0]
+      if (videoTrack) {
+        videoTrack.onended = () => {
+          stopLocalScreenSharePublisher({ notifyServer: true, clearLocalState: false })
+        }
+      }
+
+      const preferredMimeType = pickScreenShareMimeType()
+      const recorderOptions = {
+        videoBitsPerSecond: 4_000_000,
+        ...(preferredMimeType ? { mimeType: preferredMimeType } : {}),
+      }
+      recorder = new window.MediaRecorder(stream, recorderOptions)
+      screenMediaRecorderRef.current = recorder
+
+      const wsUrl = buildScreenStreamWsUrl(share.sessionId, 'publisher')
+      publishWs = new WebSocket(wsUrl)
+      publishWs.binaryType = 'arraybuffer'
+      screenPublishWsRef.current = publishWs
+
+      await new Promise((resolve, reject) => {
+        let settled = false
+        publishWs.onopen = () => {
+          if (settled) return
+          settled = true
+          resolve()
+        }
+        publishWs.onerror = () => {
+          if (settled) return
+          settled = true
+          reject(new Error('Failed to connect screen stream WebSocket'))
+        }
+        publishWs.onclose = () => {
+          if (!settled) {
+            settled = true
+            reject(new Error('Screen stream WebSocket closed before opening'))
+            return
+          }
+          if (!screenPublisherStoppingRef.current) {
+            setScreenShareError('Screen streaming connection ended.')
+            stopLocalScreenSharePublisher({ notifyServer: false, clearLocalState: false })
+          }
+        }
+      })
+
+      publishWs.onclose = () => {
+        if (!screenPublisherStoppingRef.current) {
+          setScreenShareError('Screen streaming connection ended.')
+          stopLocalScreenSharePublisher({ notifyServer: false, clearLocalState: false })
+        }
+      }
+      publishWs.onerror = () => {
+        if (!screenPublisherStoppingRef.current) {
+          setScreenShareError('Screen streaming connection error.')
+        }
+      }
+
+      const settings = videoTrack?.getSettings?.() || {}
+      publishWs.send(JSON.stringify({
+        type: 'init',
+        mime_type: recorder.mimeType || preferredMimeType || 'video/webm',
+        width: Number(settings.width) || undefined,
+        height: Number(settings.height) || undefined,
+        fps_target: 30,
+      }))
+
+      recorder.ondataavailable = (event) => {
+        if (!event?.data || event.data.size <= 0) return
+        if (!screenPublishWsRef.current || screenPublishWsRef.current.readyState !== WebSocket.OPEN) return
+        event.data.arrayBuffer()
+          .then((buf) => {
+            if (!screenPublishWsRef.current || screenPublishWsRef.current.readyState !== WebSocket.OPEN) return
+            screenPublishWsRef.current.send(buf)
+          })
+          .catch((err) => {
+            console.error('Failed to read screen share chunk', err)
+          })
+      }
+      recorder.onerror = () => {
+        setScreenShareError('Screen recorder error.')
+      }
+      recorder.start(150)
+
+      setScreenSharePendingStart(false)
+      setActiveScreenShare((prev) => {
+        if (!prev || prev.sessionId !== share.sessionId) return prev
+        return { ...prev, status: 'started' }
+      })
+    } catch (err) {
+      console.error('Failed to start screen sharing publisher', err)
+      const msg = err?.message || 'Failed to start screen sharing'
+      setScreenSharePendingStart(false)
+      setIsScreenSharePublisher(false)
+      setScreenShareError(msg)
+      stopLocalScreenSharePublisher({ notifyServer: true, clearLocalState: true })
+    } finally {
+      screenPublisherStartingRef.current = false
+    }
+  }
+
+  useEffect(() => {
+    if (!isScreenSharePublisher) return
+    if (!activeScreenShare?.sessionId) return
+    if (activeScreenShare.status !== 'granted') return
+    void startScreenSharePublisher(activeScreenShare)
+  }, [activeScreenShare, isScreenSharePublisher])
+
+  const stopLocalScreenShareViewer = ({ clearState = false, preserveError = true, keepSocket = false } = {}) => {
+    if (screenViewerStoppingRef.current) return
+    screenViewerStoppingRef.current = true
+    if (!keepSocket) {
+      clearScreenViewerReconnectTimer({ resetAttempts: !!clearState })
+    }
+
+    if (!keepSocket) {
+      const viewerWs = screenViewerWsRef.current
+      screenViewerWsRef.current = null
+      screenViewerSessionRef.current = ''
+
+      try {
+        if (viewerWs) {
+          try { viewerWs.onopen = null; viewerWs.onmessage = null; viewerWs.onclose = null; viewerWs.onerror = null } catch {}
+          if (viewerWs.readyState === WebSocket.OPEN || viewerWs.readyState === WebSocket.CONNECTING) {
+            viewerWs.close()
+          }
+        }
+      } catch {}
+    }
+
+    const sourceBuffer = screenViewerSourceBufferRef.current
+    const mediaSource = screenViewerMediaSourceRef.current
+    const sourceOpenHandler = screenViewerSourceOpenHandlerRef.current
+    const updateEndHandler = screenViewerUpdateEndHandlerRef.current
+
+    try {
+      if (sourceBuffer && updateEndHandler) {
+        sourceBuffer.removeEventListener('updateend', updateEndHandler)
+      }
+    } catch {}
+    try {
+      if (mediaSource && sourceOpenHandler) {
+        mediaSource.removeEventListener('sourceopen', sourceOpenHandler)
+      }
+    } catch {}
+    try {
+      if (mediaSource && mediaSource.readyState === 'open') {
+        mediaSource.endOfStream()
+      }
+    } catch {}
+
+    screenViewerSourceBufferRef.current = null
+    screenViewerMediaSourceRef.current = null
+    screenViewerSourceOpenHandlerRef.current = null
+    screenViewerUpdateEndHandlerRef.current = null
+    screenViewerChunkQueueRef.current = []
+    screenViewerPendingInitRef.current = null
+    screenViewerTrimInProgressRef.current = false
+
+    if (screenViewerObjectUrlRef.current) {
+      const url = screenViewerObjectUrlRef.current
+      screenViewerObjectUrlRef.current = ''
+      try {
+        const videoEl = screenViewerVideoRef.current
+        if (videoEl) {
+          try { videoEl.pause() } catch {}
+          try { videoEl.removeAttribute('src') } catch {}
+          try { videoEl.load() } catch {}
+        }
+      } catch {}
+      try { URL.revokeObjectURL(url) } catch {}
+    }
+
+    if (clearState) {
+      if (!keepSocket) setScreenViewerConnected(false)
+      setScreenViewerReady(false)
+      setScreenViewerMimeType('')
+      if (!preserveError) setScreenViewerError('')
+    } else {
+      if (!keepSocket) setScreenViewerConnected(false)
+      setScreenViewerReady(false)
+    }
+
+    setTimeout(() => { screenViewerStoppingRef.current = false }, 0)
+  }
+
+  const maybeTrimScreenViewerBuffer = () => {
+    if (screenViewerTrimInProgressRef.current) return false
+    const sb = screenViewerSourceBufferRef.current
+    const videoEl = screenViewerVideoRef.current
+    if (!sb || !videoEl || sb.updating) return false
+    let buffered
+    try {
+      buffered = sb.buffered
+    } catch {
+      return false
+    }
+    if (!buffered || buffered.length === 0) return false
+    try {
+      const start = buffered.start(0)
+      const end = buffered.end(buffered.length - 1)
+      if ((end - start) < 8) return false
+      const trimTo = Math.max(0, (videoEl.currentTime || 0) - 1)
+      if (trimTo <= start + 0.5) return false
+      screenViewerTrimInProgressRef.current = true
+      sb.remove(start, trimTo)
+      return true
+    } catch {
+      screenViewerTrimInProgressRef.current = false
+      return false
+    }
+  }
+
+  const flushScreenViewerChunkQueue = () => {
+    const ms = screenViewerMediaSourceRef.current
+    const sb = screenViewerSourceBufferRef.current
+    if (!ms || !sb) return
+    if (ms.readyState !== 'open' || sb.updating) return
+    const next = screenViewerChunkQueueRef.current.shift()
+    if (!next) {
+      const videoEl = screenViewerVideoRef.current
+      if (videoEl && videoEl.paused) {
+        videoEl.play().catch(() => {})
+      }
+      return
+    }
+    try {
+      sb.appendBuffer(next)
+    } catch (err) {
+      console.error('Failed to append screen share chunk', err)
+      setScreenViewerError('Failed to render screen share stream.')
+      stopLocalScreenShareViewer({ clearState: true, preserveError: true })
+    }
+  }
+
+  const initializeScreenViewerMse = (initPayload) => {
+    const mimeType = initPayload?.mime_type
+    if (!mimeType) {
+      setScreenViewerError('Screen share init is missing a mime type.')
+      stopLocalScreenShareViewer({ clearState: true, preserveError: true })
+      return
+    }
+    if (typeof window === 'undefined' || typeof window.MediaSource === 'undefined') {
+      setScreenViewerError('MediaSource playback is not supported in this browser.')
+      stopLocalScreenShareViewer({ clearState: true, preserveError: true })
+      return
+    }
+    if (window.MediaSource.isTypeSupported && !window.MediaSource.isTypeSupported(mimeType)) {
+      setScreenViewerError(`Unsupported screen stream format: ${mimeType}`)
+      stopLocalScreenShareViewer({ clearState: true, preserveError: true })
+      return
+    }
+
+    stopLocalScreenShareViewer({ clearState: true, preserveError: true, keepSocket: true })
+    screenViewerPendingInitRef.current = initPayload
+    setScreenViewerError('')
+    setScreenViewerReady(false)
+    setScreenViewerMimeType(mimeType)
+
+    const mediaSource = new window.MediaSource()
+    screenViewerMediaSourceRef.current = mediaSource
+    const objectUrl = URL.createObjectURL(mediaSource)
+    screenViewerObjectUrlRef.current = objectUrl
+
+    const onSourceOpen = () => {
+      const ms = screenViewerMediaSourceRef.current
+      if (!ms || ms !== mediaSource) return
+      try {
+        const sb = ms.addSourceBuffer(mimeType)
+        screenViewerSourceBufferRef.current = sb
+        const onUpdateEnd = () => {
+          if (screenViewerTrimInProgressRef.current) {
+            screenViewerTrimInProgressRef.current = false
+          }
+          if (!screenViewerReady) setScreenViewerReady(true)
+          if (maybeTrimScreenViewerBuffer()) return
+          flushScreenViewerChunkQueue()
+        }
+        screenViewerUpdateEndHandlerRef.current = onUpdateEnd
+        sb.addEventListener('updateend', onUpdateEnd)
+        flushScreenViewerChunkQueue()
+      } catch (err) {
+        console.error('Failed to initialize MSE source buffer', err)
+        setScreenViewerError('Failed to initialize viewer playback.')
+        stopLocalScreenShareViewer({ clearState: true, preserveError: true })
+      }
+    }
+    screenViewerSourceOpenHandlerRef.current = onSourceOpen
+    mediaSource.addEventListener('sourceopen', onSourceOpen)
+
+    const videoEl = screenViewerVideoRef.current
+    if (videoEl) {
+      try {
+        videoEl.muted = true
+        videoEl.playsInline = true
+        videoEl.autoplay = true
+        videoEl.src = objectUrl
+      } catch (err) {
+        console.error('Failed to attach viewer video element', err)
+        setScreenViewerError('Failed to attach viewer video element.')
+        stopLocalScreenShareViewer({ clearState: true, preserveError: true })
+      }
+    }
+  }
+
+  const scheduleScreenShareViewerReconnect = (share) => {
+    if (!share?.sessionId) return
+    if (screenViewerReconnectTimerRef.current) return
+    const attempt = screenViewerReconnectAttemptRef.current
+    const delay = SCREEN_VIEWER_RECONNECT_DELAYS_MS[
+      Math.min(attempt, SCREEN_VIEWER_RECONNECT_DELAYS_MS.length - 1)
+    ]
+    screenViewerReconnectAttemptRef.current = attempt + 1
+    screenViewerReconnectTimerRef.current = setTimeout(() => {
+      screenViewerReconnectTimerRef.current = null
+      const currentShare = activeScreenShareRef.current
+      if (!currentShare) return
+      if (currentShare.sessionId !== share.sessionId) return
+      if (currentShare.status !== 'started') return
+      if (currentShare.sharerUserId === user?.id) return
+      connectScreenShareViewer(currentShare)
+    }, delay)
+  }
+
+  const connectScreenShareViewer = (share) => {
+    if (!share?.sessionId || !token) return
+    if (screenViewerWsRef.current && screenViewerSessionRef.current === share.sessionId) return
+
+    clearScreenViewerReconnectTimer()
+    stopLocalScreenShareViewer({ clearState: true, preserveError: false })
+    setScreenViewerError('')
+    setScreenViewerReady(false)
+    setScreenViewerConnected(false)
+    screenViewerChunkQueueRef.current = []
+
+    const viewerWs = new WebSocket(buildScreenStreamWsUrl(share.sessionId, 'viewer'))
+    viewerWs.binaryType = 'arraybuffer'
+    screenViewerWsRef.current = viewerWs
+    screenViewerSessionRef.current = share.sessionId
+
+    viewerWs.onopen = () => {
+      if (screenViewerWsRef.current !== viewerWs) return
+      clearScreenViewerReconnectTimer({ resetAttempts: true })
+      setScreenViewerConnected(true)
+      setScreenViewerError('')
+    }
+
+    viewerWs.onmessage = (event) => {
+      if (screenViewerWsRef.current !== viewerWs) return
+      const data = event.data
+      if (typeof data === 'string') {
+        try {
+          const parsed = JSON.parse(data)
+          if (parsed?.type === 'init') {
+            initializeScreenViewerMse(parsed)
+          }
+        } catch (err) {
+          console.error('Failed to parse screen viewer init', err)
+        }
+        return
+      }
+
+      const enqueueChunk = (buf) => {
+        if (!buf || buf.byteLength === 0) return
+        screenViewerChunkQueueRef.current.push(new Uint8Array(buf))
+        if (screenViewerChunkQueueRef.current.length > SCREEN_VIEWER_MAX_QUEUED_CHUNKS) {
+          const dropCount = screenViewerChunkQueueRef.current.length - SCREEN_VIEWER_MAX_QUEUED_CHUNKS
+          screenViewerChunkQueueRef.current.splice(0, dropCount)
+        }
+        flushScreenViewerChunkQueue()
+      }
+
+      if (data instanceof ArrayBuffer) {
+        enqueueChunk(data)
+        return
+      }
+      if (data instanceof Blob) {
+        data.arrayBuffer().then(enqueueChunk).catch((err) => {
+          console.error('Failed reading viewer chunk blob', err)
+        })
+      }
+    }
+
+    viewerWs.onerror = () => {
+      if (screenViewerWsRef.current !== viewerWs) return
+      if (!screenViewerStoppingRef.current) {
+        setScreenViewerError('Viewer stream connection error.')
+      }
+    }
+
+    viewerWs.onclose = () => {
+      if (screenViewerWsRef.current !== viewerWs) return
+      const wasIntentional = screenViewerStoppingRef.current
+      const currentSession = activeScreenShareRef.current?.sessionId
+      const shouldStillBeViewing =
+        activeScreenShareRef.current &&
+        activeScreenShareRef.current.status === 'started' &&
+        activeScreenShareRef.current.sharerUserId !== user?.id &&
+        currentSession === share.sessionId
+      stopLocalScreenShareViewer({ clearState: true, preserveError: true })
+      if (shouldStillBeViewing && !wasIntentional) {
+        setScreenViewerError('Viewer stream disconnected. Reconnecting...')
+        scheduleScreenShareViewerReconnect(share)
+      }
+    }
+  }
+
+  useEffect(() => {
+    const share = activeScreenShare
+    const shouldView =
+      !!share?.sessionId &&
+      share.status === 'started' &&
+      share.sharerUserId &&
+      share.sharerUserId !== user?.id &&
+      !!token
+
+    if (!shouldView) {
+      stopLocalScreenShareViewer({ clearState: true, preserveError: false })
+      return
+    }
+
+    connectScreenShareViewer(share)
+  }, [activeScreenShare, user?.id, token])
+
+  const requestScreenShareStart = () => {
+    if (!wsRef.current || !isConnected) {
+      setScreenShareError('You must be connected to start screen sharing.')
+      return
+    }
+    if (activeScreenShare && activeScreenShare.sharerUserId !== user?.id) {
+      setScreenShareDeniedInfo({
+        sharerUserId: activeScreenShare.sharerUserId,
+        sharerName: activeScreenShare.sharerName || 'Another member',
+        reason: 'already_active',
+        activeSession: activeScreenShare.sessionId || '',
+      })
+      return
+    }
+    setScreenShareError('')
+    setScreenShareDeniedInfo(null)
+    setScreenSharePendingStart(true)
+    wsRef.current.send(JSON.stringify({
+      type: 'screen_share_request_start',
+      payload: {},
+    }))
+  }
+
+  const stopScreenShare = () => {
+    if (!wsRef.current || !isConnected) {
+      stopLocalScreenSharePublisher({ notifyServer: false, clearLocalState: true })
+      setScreenShareError('Connection lost. Unable to stop screen sharing.')
+      return
+    }
+    setActiveScreenShare((prev) => {
+      if (!prev) return prev
+      return { ...prev, status: 'stopping' }
+    })
+    stopLocalScreenSharePublisher({ notifyServer: true, clearLocalState: false })
   }
 
   const sendMessage = async () => {
@@ -807,6 +1519,97 @@ const Chat = () => {
               )}
             </div>
           </div>
+        </div>
+      </div>
+
+      <div className="px-4 pt-3">
+        <div className="rounded-xl border border-gray-200 bg-white/90 px-4 py-3 dark:border-gray-700 dark:bg-gray-800/90">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="min-w-0">
+              <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">Screen sharing</div>
+              {activeScreenShare ? (
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                  <span className="font-medium text-gray-800 dark:text-gray-100">
+                    {activeScreenShare.sharerName || 'A member'}
+                  </span>{' '}
+                  is sharing their screen.
+                  {isScreenSharePublisher ? ' You are the active sharer.' : ''}
+                </p>
+              ) : (
+                <p className="text-sm text-gray-600 dark:text-gray-300">
+                  One member can share their screen at a time.
+                </p>
+              )}
+              {screenShareDeniedInfo && !activeScreenShare && (
+                <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                  {screenShareDeniedInfo.sharerName} is already sharing a screen.
+                </p>
+              )}
+              {screenShareError && (
+                <p className="mt-1 text-xs text-red-600 dark:text-red-300">{screenShareError}</p>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {isScreenSharePublisher ? (
+                <button
+                  type="button"
+                  onClick={stopScreenShare}
+                  disabled={!isConnected}
+                  className="btn-outline border-red-300 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40 disabled:opacity-50"
+                >
+                  Stop sharing
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={requestScreenShareStart}
+                  disabled={
+                    !isConnected ||
+                    screenSharePendingStart ||
+                    (activeScreenShare && activeScreenShare.sharerUserId !== user?.id)
+                  }
+                  className="btn-primary disabled:opacity-50"
+                >
+                  {screenSharePendingStart ? 'Requesting...' : 'Share screen'}
+                </button>
+              )}
+            </div>
+          </div>
+          {activeScreenShare && (
+            isScreenSharePublisher ? (
+              <div className="mt-3 rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-4 text-xs text-gray-500 dark:border-gray-600 dark:bg-gray-900/40 dark:text-gray-300">
+                Your screen is being shared. Viewer playback is shown to other team members.
+              </div>
+            ) : (
+              <div className="mt-3 space-y-2">
+                <div className="overflow-hidden rounded-xl border border-gray-200 bg-black dark:border-gray-700">
+                  <video
+                    ref={screenViewerVideoRef}
+                    autoPlay
+                    muted
+                    playsInline
+                    className="block w-full h-auto max-h-[28rem] bg-black"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  <span className={`${screenViewerConnected ? 'text-green-600 dark:text-green-300' : 'text-gray-500 dark:text-gray-300'}`}>
+                    {screenViewerConnected ? 'Viewer connected' : 'Viewer disconnected'}
+                  </span>
+                  <span className={`${screenViewerReady ? 'text-blue-600 dark:text-blue-300' : 'text-gray-500 dark:text-gray-300'}`}>
+                    {screenViewerReady ? 'Rendering stream' : 'Waiting for stream data'}
+                  </span>
+                  {screenViewerMimeType && (
+                    <span className="text-gray-500 dark:text-gray-300 truncate">
+                      {screenViewerMimeType}
+                    </span>
+                  )}
+                </div>
+                {screenViewerError && (
+                  <p className="text-xs text-red-600 dark:text-red-300">{screenViewerError}</p>
+                )}
+              </div>
+            )
+          )}
         </div>
       </div>
 
